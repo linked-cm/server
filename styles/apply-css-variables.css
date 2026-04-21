@@ -1,0 +1,10 @@
+@use 'sass:meta';
+
+/*css variable*/
+:root {
+  --font-color: #{meta.inspect($fontColor)};
+  --primary-color: #{meta.inspect($primaryColor)};
+}
+
+/*we COULD overwrite the variables after setting them, if we wanted to avoid people from using the SCSS variables instead of the CSS variables*/
+/*$fontColor: null;*/
