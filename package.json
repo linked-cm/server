@@ -71,7 +71,9 @@
     "@types/react-dom": "^18.0.6",
     "cross-env": "^7.0.3",
     "prettier": "3.2.5",
-    "typescript-plugin-css-modules": "^5.1.0"
+    "typescript-plugin-css-modules": "^5.1.0",
+    "@changesets/cli": "^2.29.8",
+    "@changesets/changelog-github": "^0.5.2"
   },
   "module": "lib/esm/index.js",
   "exports": {
