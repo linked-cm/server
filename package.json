@@ -11,15 +11,15 @@
     "url": ""
   },
   "version": "1.0.7",
-  "lincd": true,
+  "linkedPackage": true,
   "main": "lib/cjs/index.js",
   "types": "dist/lincd-server.d.ts",
   "license": "ISC",
   "scripts": {
-    "start": "npm exec lincd dev",
-    "build": "yarn lincd build",
-    "prepublishOnly": "yarn lincd build production",
-    "postpublish": "npm exec lincd register"
+    "start": "npm exec linked dev",
+    "build": "yarn linked build",
+    "prepublishOnly": "yarn linked build production",
+    "postpublish": "npm exec linked register"
   },
   "keywords": [
     "lincd",
@@ -32,6 +32,7 @@
     "web3"
   ],
   "dependencies": {
+    "@_linked/cli": "^1.2",
     "@_linked/core": "^2.2.1",
     "@_linked/server-utils": "~1.0",
     "adm-zip": "^0.5.16",
@@ -45,7 +46,6 @@
     "express": "^4.18.3",
     "fetch-cookie": "^3.1.0",
     "is-object": "^1.0.2",
-    "lincd-cli": "^1.2",
     "lincd-sioc": "~1.0",
     "n3": "^1.17.2",
     "node-addon-api": "^8.2.2",
