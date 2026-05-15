@@ -9,19 +9,19 @@ import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 export class BackendAPIStoreProvider extends ShapeProvider {
   public shape = BackendAPIStore;
 
-  selectQuery(store: BackendAPIStore, query: any) {
+  selectQuery(query: any) {
     return LinkedStorage.selectQuery(query);
   }
 
-  updateQuery(store: BackendAPIStore, query: any) {
+  updateQuery(query: any) {
     return LinkedStorage.updateQuery(query);
   }
 
-  createQuery(store: BackendAPIStore, query: any) {
+  createQuery(query: any) {
     return LinkedStorage.createQuery(query);
   }
 
-  deleteQuery(store: BackendAPIStore, query: any) {
+  deleteQuery(query: any) {
     return LinkedStorage.deleteQuery(query);
   }
 }
