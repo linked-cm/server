@@ -6,7 +6,7 @@ import { LinkedStorage } from '@_linked/core/utils/LinkedStorage';
 import { JSONWriter } from '@_linked/server-utils/utils/JSONWriter';
 import { cached } from '@_linked/core/utils/cached';
 import { getShapeIndex, ShapeDetails } from '../utils/Shapes.js';
-import { SparqlStore as SPARQLStore } from '@_linked/core/sparql/SparqlStore';
+import { SparqlDataset as SPARQLStore } from '@_linked/core/sparql/SparqlDataset';
 
 const cacheTime = process.env.NODE_ENV === 'development' ? 0 : Infinity;
 export type ShapeSummary = {
