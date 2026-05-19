@@ -200,7 +200,7 @@ export class LincdServer extends Shape {
   // async serveData(req,res) {
   //   let nodeURI = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
   //
-  //   let store = LinkedStorage.getStores().find(store => {
+  //   let store = LinkedStorage.getDatasets().find(store => {
   //     return nodeURI.includes(store.namedNode.uri)
   //   })
   // }
@@ -544,7 +544,7 @@ export class LincdServer extends Shape {
    */
   async initStores() {
     return Promise.all(
-      LinkedStorage.getStores().map((store) => {
+      LinkedStorage.getDatasets().map((store) => {
         return store.init ? store.init() : Promise.resolve();
       })
     );

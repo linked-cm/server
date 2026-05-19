@@ -301,7 +301,7 @@ var LincdServer = /** @class */ (function (_super) {
     // async serveData(req,res) {
     //   let nodeURI = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
     //
-    //   let store = LinkedStorage.getStores().find(store => {
+    //   let store = LinkedStorage.getDatasets().find(store => {
     //     return nodeURI.includes(store.namedNode.uri)
     //   })
     // }
@@ -609,7 +609,7 @@ var LincdServer = /** @class */ (function (_super) {
     LincdServer.prototype.initStores = function () {
         return __awaiter(this, void 0, void 0, function () {
             return __generator(this, function (_a) {
-                return [2 /*return*/, Promise.all(LinkedStorage_1.LinkedStorage.getStores().map(function (store) {
+                return [2 /*return*/, Promise.all(LinkedStorage_1.LinkedStorage.getDatasets().map(function (store) {
                         return store.init ? store.init() : Promise.resolve();
                     }))];
             });

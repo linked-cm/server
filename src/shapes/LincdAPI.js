@@ -165,7 +165,7 @@ var LincdAPI = /** @class */ (function (_super) {
                         shapeIndex = (0, Shapes_js_1.getShapeIndex)();
                         typesWithInstances = new Map();
                         this.checkRawQuerySupport();
-                        return [4 /*yield*/, LinkedStorage_1.LinkedStorage.getDefaultStore()
+                        return [4 /*yield*/, LinkedStorage_1.LinkedStorage.getDefaultDataset()
                                 .rawQuery("SELECT (COUNT(?s) AS ?count) ?type WHERE { ?s a ?type } GROUP BY ?type")
                                 .then(function (results) {
                                 if (!results)
@@ -211,11 +211,11 @@ var LincdAPI = /** @class */ (function (_super) {
     LincdAPI.prototype.post_select_raw = function (_a) {
         var query = _a.query;
         this.checkRawQuerySupport();
-        return LinkedStorage_1.LinkedStorage.getDefaultStore().rawQuery(query);
+        return LinkedStorage_1.LinkedStorage.getDefaultDataset().rawQuery(query);
     };
     LincdAPI.prototype.checkRawQuerySupport = function () {
-        if (!LinkedStorage_1.LinkedStorage.getDefaultStore().rawQuery) {
-            throw new Error("Default store (".concat(Object.getPrototypeOf(LinkedStorage_1.LinkedStorage.getDefaultStore()).constructor
+        if (!LinkedStorage_1.LinkedStorage.getDefaultDataset().rawQuery) {
+            throw new Error("Default store (".concat(Object.getPrototypeOf(LinkedStorage_1.LinkedStorage.getDefaultDataset()).constructor
                 .name, ") does not support raw SPARQL queries"));
         }
     };

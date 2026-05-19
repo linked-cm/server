@@ -83,7 +83,7 @@ export class LincdAPI extends Shape {
 
         const typesWithInstances = new Map<string, number>();
         this.checkRawQuerySupport();
-        await (LinkedStorage.getDefaultStore() as unknown as SPARQLStore)
+        await (LinkedStorage.getDefaultDataset() as unknown as SPARQLStore)
           .rawQuery(
             `SELECT (COUNT(?s) AS ?count) ?type WHERE { ?s a ?type } GROUP BY ?type`
           )
@@ -133,16 +133,16 @@ export class LincdAPI extends Shape {
 
   post_select_raw({ query }) {
     this.checkRawQuerySupport();
-    return (LinkedStorage.getDefaultStore() as unknown as SPARQLStore).rawQuery(
+    return (LinkedStorage.getDefaultDataset() as unknown as SPARQLStore).rawQuery(
       query
     );
   }
 
   private checkRawQuerySupport() {
-    if (!(LinkedStorage.getDefaultStore() as unknown as SPARQLStore).rawQuery) {
+    if (!(LinkedStorage.getDefaultDataset() as unknown as SPARQLStore).rawQuery) {
       throw new Error(
         `Default store (${
-          Object.getPrototypeOf(LinkedStorage.getDefaultStore()).constructor
+          Object.getPrototypeOf(LinkedStorage.getDefaultDataset()).constructor
             .name
         }) does not support raw SPARQL queries`
       );
