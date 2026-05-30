@@ -446,6 +446,27 @@ export class LincdServer extends Shape {
       this.resizeImage(req, res);
     });
 
+    // Scoped-package variants (@scope/pkg). Register BEFORE the unscoped
+    // routes — Express `:pkg` won't consume slashes, so a call to
+    // `/call/@_linked/auth/signinDev` would otherwise fall through to the
+    // 3-segment `:pkg/:shape/:method` route and be misinterpreted as a
+    // shape-method call (pkg=`@_linked`, shape=`auth`). These handlers
+    // recognise the `@scope/pkg` prefix and rebuild the full package name
+    // before dispatching to the same handler used for unscoped packages.
+    this.server.post(
+      '/call/@:scope/:pkg/:method',
+      this.handleErrorsJson(async (req, res) => {
+        req.params.pkg = `@${req.params.scope}/${req.params.pkg}`;
+        return this.processBackendMethodCall(req, res);
+      })
+    );
+    this.server.post(
+      '/call/@:scope/:pkg/:shape/:method',
+      this.handleErrorsJson(async (req, res) => {
+        req.params.pkg = `@${req.params.scope}/${req.params.pkg}`;
+        return this.processShapeMethodCall(req, res);
+      })
+    );
     this.server.post(
       '/call/:pkg/:method',
       this.handleErrorsJson(async (req, res) =>
