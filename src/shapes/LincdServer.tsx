@@ -115,7 +115,7 @@ export class LincdServer extends Shape {
   private api: LincdAPI;
 
   /**
-   * yarn lincd start sends the contents of lincd.config.js as an object to this constructor
+   * yarn linked start sends the contents of linked.config.js as an object to this constructor
    * @param n
    */
   constructor(config?: LincdConfig | string | { id: string }) {

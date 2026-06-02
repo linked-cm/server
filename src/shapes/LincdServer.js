@@ -207,7 +207,7 @@ global['reactStaticRenderer'] = server_1.renderToStaticMarkup;
 var LincdServer = /** @class */ (function (_super) {
     __extends(LincdServer, _super);
     /**
-     * yarn lincd start sends the contents of lincd.config.js as an object to this constructor
+     * yarn linked start sends the contents of linked.config.js as an object to this constructor
      * @param n
      */
     function LincdServer(config) {
