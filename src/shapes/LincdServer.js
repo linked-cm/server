@@ -313,9 +313,12 @@ var LincdServer = /** @class */ (function (_super) {
                 switch (_a.label) {
                     case 0:
                         this.initPackage();
-                        staticAccessURL = (process_1.default.env.STATIC_ACCESS_URL ||
-                            LinkedFileStorage_1.LinkedFileStorage.accessURL ||
-                            '').replace(/\/$/, '');
+                        // In dev, force a relative URL so bundles work at any PORT.
+                        staticAccessURL = (process_1.default.env.NODE_ENV === 'development')
+                            ? ''
+                            : (process_1.default.env.STATIC_ACCESS_URL ||
+                                LinkedFileStorage_1.LinkedFileStorage.accessURL ||
+                                '').replace(/\/$/, '');
                         staticAsset = function (assetPath) {
                             return "".concat(staticAccessURL, "/public").concat(assetPath);
                         };
