@@ -22,8 +22,8 @@ import type {
  * passed verbatim from linked.{frontend,backend}.datasets.json's `config`.
  */
 export interface BackendAPIStoreConfig {
-  /** Stable name; becomes the suffix of the store URI: ${DATA_ROOT}/backend-api-store/<alias>. */
-  alias?: string;
+  /** Stable name; becomes the suffix of the store URI: ${DATA_ROOT}/backend-api-store/<name>. */
+  name?: string;
   /** Or pass a fully-qualified URI directly. */
   id?: string;
 }
@@ -42,7 +42,7 @@ export class BackendAPIStore extends Shape implements IDataset {
       return;
     }
     if (typeof config === 'string') {
-      // Legacy string-as-alias form. Wrap into config shape.
+      // Legacy string-as-name form. Wrap into config shape.
       super({ id: `${process.env.DATA_ROOT}/backend-api-store/${config}` });
       return;
     }
@@ -50,9 +50,9 @@ export class BackendAPIStore extends Shape implements IDataset {
       super({ id: (config as BackendAPIStoreConfig).id! });
       return;
     }
-    if ((config as BackendAPIStoreConfig).alias) {
-      const alias = (config as BackendAPIStoreConfig).alias!;
-      super({ id: `${process.env.DATA_ROOT}/backend-api-store/${alias}` });
+    if ((config as BackendAPIStoreConfig).name) {
+      const name = (config as BackendAPIStoreConfig).name!;
+      super({ id: `${process.env.DATA_ROOT}/backend-api-store/${name}` });
       return;
     }
     super();
