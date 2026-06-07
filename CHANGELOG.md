@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.0.1
+
+### Patch Changes
+
+- [#6](https://github.com/linked-cm/server/pull/6) [`7eb425b`](https://github.com/linked-cm/server/commit/7eb425b26cc1e234041c6a678b184874ef2be017) Thanks [@flyon](https://github.com/flyon)! - Rebuild + republish. The 2.0.0 tarball shipped without `lib/` because the build silently failed against an empty `@_linked/server-utils@1.0.4` tarball. `@_linked/server-utils@1.0.5` now ships its `lib/` correctly, so this version compiles + packages as intended.
+
 ## 2.0.0
 
 ### Major Changes
