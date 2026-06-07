@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.0.2
+
+### Patch Changes
+
+- [#8](https://github.com/linked-cm/server/pull/8) [`17e6771`](https://github.com/linked-cm/server/commit/17e6771ba1c2eae2daf24b97dcb9e934827f4396) Thanks [@flyon](https://github.com/flyon)! - Rebuild against `@_linked/server-utils@1.0.5`. The lockfile previously pinned `1.0.4` whose published tarball was empty, so server's build couldn't resolve `BackendProvider`/`JSONParser`/`JSONWriter`/`RouteConfig`. Lockfile now points at `1.0.5` which ships its `lib/` correctly.
+
 ## 2.0.1
 
 ### Patch Changes
