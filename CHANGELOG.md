@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.0.3
+
+### Patch Changes
+
+- [#10](https://github.com/linked-cm/server/pull/10) [`5619ddf`](https://github.com/linked-cm/server/commit/5619ddf9268469eea566e110ce5c3c4fd68b407d) Thanks [@flyon](https://github.com/flyon)! - Switch to explicit per-step build pipeline (mirrors `@_linked/cli`'s and `@_linked/server-utils`'s). The previous `yarn linked build` wrapper was failing silently in CI and shipping incomplete tarballs.
+
 ## 2.0.2
 
 ### Patch Changes
