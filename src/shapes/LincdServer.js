@@ -207,7 +207,7 @@ global['reactStaticRenderer'] = server_1.renderToStaticMarkup;
 var LincdServer = /** @class */ (function (_super) {
     __extends(LincdServer, _super);
     /**
-     * yarn lincd start sends the contents of lincd.config.js as an object to this constructor
+     * yarn linked start sends the contents of linked.config.js as an object to this constructor
      * @param n
      */
     function LincdServer(config) {
@@ -301,7 +301,7 @@ var LincdServer = /** @class */ (function (_super) {
     // async serveData(req,res) {
     //   let nodeURI = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
     //
-    //   let store = LinkedStorage.getStores().find(store => {
+    //   let store = LinkedStorage.getDatasets().find(store => {
     //     return nodeURI.includes(store.namedNode.uri)
     //   })
     // }
@@ -313,9 +313,12 @@ var LincdServer = /** @class */ (function (_super) {
                 switch (_a.label) {
                     case 0:
                         this.initPackage();
-                        staticAccessURL = (process_1.default.env.STATIC_ACCESS_URL ||
-                            LinkedFileStorage_1.LinkedFileStorage.accessURL ||
-                            '').replace(/\/$/, '');
+                        // In dev, force a relative URL so bundles work at any PORT.
+                        staticAccessURL = (process_1.default.env.NODE_ENV === 'development')
+                            ? ''
+                            : (process_1.default.env.STATIC_ACCESS_URL ||
+                                LinkedFileStorage_1.LinkedFileStorage.accessURL ||
+                                '').replace(/\/$/, '');
                         staticAsset = function (assetPath) {
                             return "".concat(staticAccessURL, "/public").concat(assetPath);
                         };
@@ -609,7 +612,7 @@ var LincdServer = /** @class */ (function (_super) {
     LincdServer.prototype.initStores = function () {
         return __awaiter(this, void 0, void 0, function () {
             return __generator(this, function (_a) {
-                return [2 /*return*/, Promise.all(LinkedStorage_1.LinkedStorage.getStores().map(function (store) {
+                return [2 /*return*/, Promise.all(LinkedStorage_1.LinkedStorage.getDatasets().map(function (store) {
                         return store.init ? store.init() : Promise.resolve();
                     }))];
             });

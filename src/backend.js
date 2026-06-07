@@ -86,8 +86,8 @@ var LincdServerBackendProvider = /** @class */ (function (_super) {
             return __generator(this, function (_a) {
                 switch (_a.label) {
                     case 0:
-                        if (!LinkedFileStorage_1.LinkedFileStorage.getDefaultStore()) {
-                            LinkedFileStorage_1.LinkedFileStorage.setDefaultStore(new LocalFileStore_js_1.LocalFileStore(process.env.NODE_ENV + '-filestore'));
+                        if (!LinkedFileStorage_1.LinkedFileStorage.getDefaultDataset()) {
+                            LinkedFileStorage_1.LinkedFileStorage.setDefaultDataset(new LocalFileStore_js_1.LocalFileStore(process.env.NODE_ENV + '-filestore'));
                         }
                         fileSystemUploadPath = path_1.default.join('data', 'filestores');
                         _a.label = 1;

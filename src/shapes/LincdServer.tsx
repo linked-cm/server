@@ -9,7 +9,7 @@ import { Server as HttpServer } from 'http';
 import { getWebpackAppConfig } from '@_linked/cli/config-webpack-app';
 import { getLincdPackages } from '@_linked/cli/cli-methods';
 import { getPackageJSON } from '@_linked/cli/utils';
-import type { LincdConfig } from '@_linked/cli/interfaces';
+import type { LinkedConfig } from '@_linked/cli/interfaces';
 import { AppContextProvider } from '@_linked/server-utils/components/AppContext';
 import { BackendProvider } from '@_linked/server-utils/utils/BackendProvider';
 import { JSONParser } from '@_linked/server-utils/utils/JSONParser';
@@ -96,7 +96,7 @@ export class LincdServer extends Shape {
    * indicates that instances of this shape need to have this rdf.type
    */
   static targetClass = lincdServer.LincdServer;
-  private config: LincdConfig;
+  private config: LinkedConfig;
   private cachedPaths: Map<string, string> = new Map();
   private assets: { [key: string]: string } & {
     manifest?: Record<string, string>;
@@ -115,10 +115,10 @@ export class LincdServer extends Shape {
   private api: LincdAPI;
 
   /**
-   * yarn lincd start sends the contents of lincd.config.js as an object to this constructor
+   * yarn linked start sends the contents of linked.config.js as an object to this constructor
    * @param n
    */
-  constructor(config?: LincdConfig | string | { id: string }) {
+  constructor(config?: LinkedConfig | string | { id: string }) {
     super(
       typeof config === 'string' || (config && 'id' in config)
         ? config
@@ -200,7 +200,7 @@ export class LincdServer extends Shape {
   // async serveData(req,res) {
   //   let nodeURI = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
   //
-  //   let store = LinkedStorage.getStores().find(store => {
+  //   let store = LinkedStorage.getDatasets().find(store => {
   //     return nodeURI.includes(store.namedNode.uri)
   //   })
   // }
@@ -209,11 +209,18 @@ export class LincdServer extends Shape {
     this.initPackage();
     // Static assets should come from the static store URL (versioned path),
     // not the upload store URL. storage-config sets STATIC_ACCESS_URL accordingly.
-    const staticAccessURL = (
-      process.env.STATIC_ACCESS_URL ||
-      LinkedFileStorage.accessURL ||
-      ''
-    ).replace(/\/$/, '');
+    // In development we deliberately use a relative path so bundle URLs work
+    // regardless of which PORT the dev server bound to (browsers resolve
+    // relative URLs against window.location.origin). Hardcoding SITE_ROOT
+    // baked :4000 into every SSR'd HTML page.
+    const isDevAssets = process.env.NODE_ENV === 'development';
+    const staticAccessURL = isDevAssets
+      ? ''
+      : (
+          process.env.STATIC_ACCESS_URL ||
+          LinkedFileStorage.accessURL ||
+          ''
+        ).replace(/\/$/, '');
     const staticAsset = (assetPath: string) =>
       `${staticAccessURL}/public${assetPath}`;
     //for apps with multiple bundles this should be read from the webpack build manifest
@@ -446,6 +453,27 @@ export class LincdServer extends Shape {
       this.resizeImage(req, res);
     });
 
+    // Scoped-package variants (@scope/pkg). Register BEFORE the unscoped
+    // routes — Express `:pkg` won't consume slashes, so a call to
+    // `/call/@_linked/auth/signinDev` would otherwise fall through to the
+    // 3-segment `:pkg/:shape/:method` route and be misinterpreted as a
+    // shape-method call (pkg=`@_linked`, shape=`auth`). These handlers
+    // recognise the `@scope/pkg` prefix and rebuild the full package name
+    // before dispatching to the same handler used for unscoped packages.
+    this.server.post(
+      '/call/@:scope/:pkg/:method',
+      this.handleErrorsJson(async (req, res) => {
+        req.params.pkg = `@${req.params.scope}/${req.params.pkg}`;
+        return this.processBackendMethodCall(req, res);
+      })
+    );
+    this.server.post(
+      '/call/@:scope/:pkg/:shape/:method',
+      this.handleErrorsJson(async (req, res) => {
+        req.params.pkg = `@${req.params.scope}/${req.params.pkg}`;
+        return this.processShapeMethodCall(req, res);
+      })
+    );
     this.server.post(
       '/call/:pkg/:method',
       this.handleErrorsJson(async (req, res) =>
@@ -544,7 +572,7 @@ export class LincdServer extends Shape {
    */
   async initStores() {
     return Promise.all(
-      LinkedStorage.getStores().map((store) => {
+      LinkedStorage.getDatasets().map((store) => {
         return store.init ? store.init() : Promise.resolve();
       })
     );
