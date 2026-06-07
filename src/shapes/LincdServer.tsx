@@ -619,9 +619,10 @@ export class LincdServer extends Shape {
     //in this app's dependency tree. This avoids loading npm-installed
     //legacy packages that may use an old version of the core.
     const allLocalPackages = getLincdPackages();
-    const localPackageMap = new Map(
-      allLocalPackages.map((pkg) => [pkg.packageName, pkg])
-    );
+    const localPackageMap = new Map<
+      string,
+      { packageName: string; path: string }
+    >(allLocalPackages.map((pkg) => [pkg.packageName, pkg]));
     const relevantPackages = this.filterPackagesByDependencyTree(
       localPackageMap,
       this.package
