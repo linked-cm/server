@@ -13,7 +13,7 @@
   "version": "2.0.3",
   "linkedPackage": true,
   "main": "lib/cjs/index.js",
-  "types": "dist/lincd-server.d.ts",
+  "types": "./index.d.ts",
   "license": "ISC",
   "scripts": {
     "start": "npm exec linked dev",
@@ -96,14 +96,14 @@
       "require": "./lib/cjs/*.js"
     }
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "typesVersions": {
     "*": {
       "*": [
         "lib/esm/*"
       ]
     }
-  },
-  "publishConfig": {
-    "access": "public"
   }
 }

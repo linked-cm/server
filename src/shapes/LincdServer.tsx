@@ -223,19 +223,44 @@ export class LincdServer extends Shape {
         ).replace(/\/$/, '');
     const staticAsset = (assetPath: string) =>
       `${staticAccessURL}/public${assetPath}`;
-    //for apps with multiple bundles this should be read from the webpack build manifest
+
+    // Bundle/manifest reads handle BOTH formats during the plan-010
+    // Vite migration window:
+    //   - Vite manifest at public/bundles/.vite/manifest.json (new)
+    //   - Webpack manifest at public/bundles/manifest.json (legacy)
+    // First found wins. Vite is preferred when both exist.
     this.assets = {
       'main.js':
-        staticAsset('/bundles/main.bundle.js') + '?v=' + this.package.version, //output js bundle from Webpack
-      'main.css': staticAsset('/bundles/main.css'), //output css from Webpack
+        staticAsset('/bundles/main.bundle.js') + '?v=' + this.package.version,
+      'main.css': staticAsset('/bundles/main.css'),
     };
     try {
-      const manifestPath = path.resolve(
+      const viteManifestPath = path.resolve(
+        process.cwd(),
+        'public/bundles/.vite/manifest.json'
+      );
+      const webpackManifestPath = path.resolve(
         process.cwd(),
         'public/bundles/manifest.json'
       );
-      if (fsNative.existsSync(manifestPath)) {
-        const manifestRaw = fsNative.readFileSync(manifestPath, 'utf-8');
+      if (fsNative.existsSync(viteManifestPath)) {
+        const manifestRaw = fsNative.readFileSync(viteManifestPath, 'utf-8');
+        const viteManifest = JSON.parse(manifestRaw);
+        this.assets.manifest = viteManifest;
+        // Resolve main entry per Vite manifest shape:
+        //   { "src/index.tsx": { file: "assets/main-<hash>.js", css: [...] } }
+        const mainEntry =
+          viteManifest['src/index.tsx'] ||
+          viteManifest['src/index.ts'] ||
+          Object.values(viteManifest).find((e: any) => e?.isEntry);
+        if (mainEntry?.file) {
+          this.assets['main.js'] = staticAsset(`/bundles/${mainEntry.file}`);
+        }
+        if (mainEntry?.css?.[0]) {
+          this.assets['main.css'] = staticAsset(`/bundles/${mainEntry.css[0]}`);
+        }
+      } else if (fsNative.existsSync(webpackManifestPath)) {
+        const manifestRaw = fsNative.readFileSync(webpackManifestPath, 'utf-8');
         this.assets.manifest = JSON.parse(manifestRaw);
       }
     } catch (err) {
@@ -637,11 +662,19 @@ export class LincdServer extends Shape {
         .readFile(path.join(process.cwd(), 'package.json'), 'utf-8')
         .then(async (contents) => {
           let pkg = JSON.parse(contents);
-          await this.indexPackageBackendProviders(
-            pkg.name,
-            false,
-            path.join(process.cwd(), 'src', 'backend.ts')
-          );
+          // Route through default ${pkg}/backend resolution. The app's
+          // package.json `exports`./backend field handles dev vs prod:
+          //   "exports": {
+          //     "./backend": {
+          //       "development": "./src/backend.ts",
+          //       "default": "./lib/esm/backend.js"
+          //     }
+          //   }
+          // Removed plan-010 D10: the source-direct
+          // path.join(cwd, 'src', 'backend.ts') override that forced TS
+          // runtime loading. Vite SSR's ssrLoadModule handles the
+          // transform; production runs from lib/esm/.
+          await this.indexPackageBackendProviders(pkg.name, false);
         });
     } catch (err) {
       console.warn(err);
@@ -1395,24 +1428,55 @@ export class LincdServer extends Shape {
           }
         }
 
-        // If we found a matching route with preloadChunks, resolve them to URLs (both JS and CSS)
+        // If we found a matching route with preloadChunks, resolve them to URLs (both JS and CSS).
+        // Manifest format detection: Vite manifest entries are objects with .file/.css; webpack
+        // manifest entries are bare strings. Try Vite shape first, fall back to webpack.
         if (
           matchedRoute?.preloadChunks &&
           Array.isArray(matchedRoute.preloadChunks)
         ) {
+          const resolveJs = (chunkName: string): string | null => {
+            // Vite shape: keyed by source path. Look up by source-path keys
+            // that match the chunk name's tail.
+            const viteEntry =
+              manifest[`src/pages/${chunkName}.tsx`] ||
+              manifest[`src/pages/${chunkName}.ts`] ||
+              Object.values(manifest as any).find(
+                (e: any) =>
+                  e?.src?.endsWith(`${chunkName}.tsx`) ||
+                  e?.src?.endsWith(`${chunkName}.ts`),
+              );
+            if (viteEntry && typeof viteEntry === 'object' && (viteEntry as any).file) {
+              return `/bundles/${(viteEntry as any).file}`;
+            }
+            // Webpack shape: keyed by output name.
+            return (
+              manifest[`${chunkName}.js`] ||
+              manifest[`${chunkName}.bundle.js`] ||
+              manifest[`${chunkName}.mjs`] ||
+              null
+            );
+          };
+          const resolveCss = (chunkName: string): string[] => {
+            const viteEntry =
+              manifest[`src/pages/${chunkName}.tsx`] ||
+              manifest[`src/pages/${chunkName}.ts`] ||
+              Object.values(manifest as any).find(
+                (e: any) =>
+                  e?.src?.endsWith(`${chunkName}.tsx`) ||
+                  e?.src?.endsWith(`${chunkName}.ts`),
+              );
+            if (viteEntry && typeof viteEntry === 'object' && Array.isArray((viteEntry as any).css)) {
+              return (viteEntry as any).css.map((c: string) => `/bundles/${c}`);
+            }
+            const webpackCss = manifest[`${chunkName}.css`];
+            return webpackCss ? [webpackCss] : [];
+          };
           preloadScripts = matchedRoute.preloadChunks
-            .map(
-              (chunkName: string) =>
-                manifest[`${chunkName}.js`] ||
-                manifest[`${chunkName}.bundle.js`] ||
-                manifest[`${chunkName}.mjs`]
-            )
-            .filter(Boolean);
-
-          // Also collect CSS chunks for the same routes
+            .map(resolveJs)
+            .filter(Boolean) as string[];
           preloadStyles = matchedRoute.preloadChunks
-            .map((chunkName: string) => manifest[`${chunkName}.css`])
-            .filter(Boolean);
+            .flatMap(resolveCss);
         }
       } catch (err) {
         console.warn('Failed to resolve preload chunks:', err);
