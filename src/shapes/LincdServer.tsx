@@ -266,6 +266,12 @@ export class LincdServer extends Shape {
     } catch (err) {
       console.warn('Could not load bundle manifest:', err);
     }
+    // Vite dev marker: when Vite is in use AND no Vite manifest exists yet
+    // (= dev mode, no `vite build` run), the HTML renderer skips
+    // pre-built CSS/JS link tags. Vite handles asset injection itself.
+    if ((this.config.server as any)?.vite && !(this.assets.manifest as any)?.['src/index.tsx']) {
+      this.assets['__viteDev'] = '1';
+    }
 
     const isProduction = process.env.NODE_ENV === 'production';
     if (!isProduction && this.config.cssMode === 'tailwind') {
@@ -315,9 +321,19 @@ export class LincdServer extends Shape {
 
     await this.callGenericBackendProvidersMethod('setupBeforeControllers');
 
+    // Vite middleware (plan 010): when the user app starts via Vite
+    // (`linked start --vite`), the orchestrator passes the Vite handle
+    // through config.server.viteMiddleware. We mount it and skip the
+    // entire webpack-dev-middleware setup below.
+    const viteMiddleware = (this.config.server as any)?.viteMiddleware;
+    if (viteMiddleware) {
+      this.server.use(viteMiddleware);
+    }
+
     // if development, run webpack from the server
     // for production you need to build the bundles before starting the server
-    const skipBuild = process.env.NO_WEBPACK === 'true';
+    const skipBuild =
+      process.env.NO_WEBPACK === 'true' || !!viteMiddleware;
     if (isDevelopment && !skipBuild) {
       //three levels up because of lib/esm (2) instead of src (1)
       //@ts-ignore
@@ -1030,7 +1046,28 @@ export class LincdServer extends Shape {
     let backendProviderExports;
     let genericBackendProvider;
     let shapeProviders = [];
-    await import(backendIndexFilePath)
+    // Plan-010 phase 4/5: when Vite SSR is active, route module loading
+    // through vite.ssrLoadModule. This handles the case where the user app
+    // is the consuming workspace itself (self-reference like
+    // @semantu/create-now/backend), which Node's ESM resolver can't resolve
+    // from inside an installed package like @_linked/server.
+    const vite: any = (this.config.server as any)?.vite;
+    const loadModule = async (specifier: string) => {
+      if (vite && typeof vite.ssrLoadModule === 'function') {
+        // For the user app's own backend, resolve to ./src/backend.ts directly.
+        // Vite reads the app's package.json exports.development condition.
+        if (specifier === `${this.package.name}/backend`) {
+          return await vite.ssrLoadModule('/src/backend.ts');
+        }
+        // For installed packages, fall back to Node's import resolver:
+        // workspace packages are externalized by Vite (see vite-config.ts
+        // ssr block) so they load via Node anyway. Many packages have no
+        // /backend export — the surrounding catch handles ERR_MODULE_NOT_FOUND.
+        return await import(specifier);
+      }
+      return await import(specifier);
+    };
+    await loadModule(backendIndexFilePath)
       .then((backendProviderExports) => {
         //instantiate the exported provider classes and add them to the right place
         Object.keys(backendProviderExports).forEach((key) => {
@@ -1403,6 +1440,13 @@ export class LincdServer extends Shape {
     let preloadScripts: string[] = [];
     let preloadStyles: string[] = [];
     let matchedRouteKey: string | null = null;
+    // Plan-010 Vite dev mode: skip preload resolution entirely. Vite
+    // handles dynamic import() at runtime — there are no pre-built
+    // chunks to preload, and the webpack-shape fallback would pick up
+    // stale bundles on disk (public/bundles/*.bundle.js from a prior
+    // webpack build) and link them, breaking hydration.
+    const usingViteDev =
+      !!(this.config.server as any)?.vite && !this.latestManifest;
 
     // Load routes config if available and extract preload chunks for the current route
     if (this.config.server?.loadRoutes) {
@@ -1431,7 +1475,10 @@ export class LincdServer extends Shape {
         // If we found a matching route with preloadChunks, resolve them to URLs (both JS and CSS).
         // Manifest format detection: Vite manifest entries are objects with .file/.css; webpack
         // manifest entries are bare strings. Try Vite shape first, fall back to webpack.
+        // Skip entirely in Vite dev mode — no pre-built chunks exist; Vite handles dynamic
+        // imports at runtime.
         if (
+          !usingViteDev &&
           matchedRoute?.preloadChunks &&
           Array.isArray(matchedRoute.preloadChunks)
         ) {
@@ -1503,9 +1550,15 @@ export class LincdServer extends Shape {
         </StaticRouter>
       </React.StrictMode>,
       {
-        bootstrapScripts: [
-          this.assets['main.js'], //generated webpack bundle from frontend/src
-        ],
+        // Bootstrap scripts:
+        // - Vite dev mode: use bootstrapModules so the browser loads them
+        //   as ES modules. Vite middleware intercepts /src/index.tsx and
+        //   transforms+serves it; /@vite/client provides the HMR client.
+        // - Production: bootstrapScripts with the hashed main.js from the
+        //   Vite (or legacy webpack) build manifest.
+        ...((this.config.server as any)?.vite
+          ? {bootstrapModules: ['/@vite/client', '/src/index.tsx']}
+          : {bootstrapScripts: [this.assets['main.js']]}),
         onShellReady: function () {
           res.statusCode = didError ? 500 : 200;
           res.setHeader('Content-type', 'text/html');
