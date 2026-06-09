@@ -1415,6 +1415,61 @@ export class LincdServer extends Shape {
     let App = this.config.server?.loadAppComponent
       ? await this.config.server.loadAppComponent()
       : null;
+
+    // Vite dev CSS collection (plan-010 iteration 1 — gap A):
+    // 1. Preload the matched route's module via ssrLoadModule so all
+    //    page-level dependencies (SigninLayout, CreateAccount, etc.)
+    //    enter Vite's moduleGraph BEFORE we collect CSS. Without this,
+    //    only App's eager imports are in the graph and lazy routes'
+    //    CSS would be missing — page renders unstyled until hydration.
+    // 2. Walk moduleGraph for CSS entries, load each via `?inline`
+    //    (Vite returns raw CSS string as default export).
+    // 3. Inject as inline <style> in HTML head (Html.tsx).
+    const vite: any = (this.config.server as any)?.vite;
+    // Vite SSR module preload (plan-010 iter1 gap A):
+    // Pages are loaded lazily via React.lazy — their modules only enter
+    // Vite's moduleGraph after the lazy resolves. For SSR CSS collection
+    // we need the page modules in the graph BEFORE the first render of
+    // each route. The orchestrator passes a preloadPagesFn that lists
+    // all page files (typically via `import.meta.glob`); we call
+    // ssrLoadModule on each path once. After the first render of a
+    // session everything is cached.
+    const preloadPagesFn: any = (this.config.server as any)?.viteSsrPreload;
+    if (vite?.ssrLoadModule && preloadPagesFn && !(this as any)._viteSsrPreloaded) {
+      try {
+        const pagePaths: string[] = await preloadPagesFn();
+        for (const p of pagePaths) {
+          try {
+            await vite.ssrLoadModule(p);
+          } catch {/* skip — page may not exist or have ssr errors */}
+        }
+      } catch {/* ignore */}
+      (this as any)._viteSsrPreloaded = true;
+    }
+
+    let ssrCss = '';
+    if (vite?.moduleGraph?.idToModuleMap) {
+      const cssChunks: string[] = [];
+      const seen = new Set<string>();
+      for (const [id] of vite.moduleGraph.idToModuleMap as Map<
+        string,
+        any
+      >) {
+        if (seen.has(id)) continue;
+        if (!/\.(module\.)?css(\?(?!.*inline)[^?]*)?$/.test(id)) continue;
+        seen.add(id);
+        try {
+          const inlineUrl = id + (id.includes('?') ? '&' : '?') + 'inline';
+          const cssModule = await vite.ssrLoadModule(inlineUrl);
+          if (typeof cssModule?.default === 'string') {
+            cssChunks.push(cssModule.default);
+          }
+        } catch {/* skip */}
+      }
+      ssrCss = cssChunks.join('\n');
+    }
+    (this.assets as any)['__viteSsrCss'] = ssrCss;
+
     await this.initRequest(req, res);
     let { requestLD, requestObject } = await this.getRequestData(req, res);
 
@@ -1554,10 +1609,25 @@ export class LincdServer extends Shape {
         // - Vite dev mode: use bootstrapModules so the browser loads them
         //   as ES modules. Vite middleware intercepts /src/index.tsx and
         //   transforms+serves it; /@vite/client provides the HMR client.
+        //   @vitejs/plugin-react requires a "preamble" inline script
+        //   defining $RefreshReg$/$RefreshSig$ — without it, the first
+        //   React module throws "can't detect preamble" and hydration
+        //   blows up. Inline via bootstrapScriptContent.
         // - Production: bootstrapScripts with the hashed main.js from the
         //   Vite (or legacy webpack) build manifest.
         ...((this.config.server as any)?.vite
-          ? {bootstrapModules: ['/@vite/client', '/src/index.tsx']}
+          ? {
+              bootstrapScriptContent: `
+                import("/@vite/client");
+                import("/@react-refresh").then(RefreshRuntime => {
+                  RefreshRuntime.injectIntoGlobalHook(window);
+                  window.$RefreshReg$ = () => {};
+                  window.$RefreshSig$ = () => (type) => type;
+                  window.__vite_plugin_react_preamble_installed__ = true;
+                  return import("/src/index.tsx");
+                });
+              `,
+            }
           : {bootstrapScripts: [this.assets['main.js']]}),
         onShellReady: function () {
           res.statusCode = didError ? 500 : 200;
