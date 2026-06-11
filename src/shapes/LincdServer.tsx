@@ -6,8 +6,11 @@ import fetchCookie from 'fetch-cookie';
 import * as fsNative from 'fs';
 import * as fs from 'fs/promises';
 import { Server as HttpServer } from 'http';
-import { getWebpackAppConfig } from '@_linked/cli/config-webpack-app';
-import { getLincdPackages } from '@_linked/cli/cli-methods';
+// Plan-011: imports from @_linked/cli now go through ./lifecycle (a
+// dynamic-import-free file) so Vite's SSR module graph doesn't pull
+// in the legacy webpack flow and emit dozens of unanalyzable-import
+// warnings on every boot.
+import { getLincdPackages } from '@_linked/cli/lifecycle';
 import { getPackageJSON } from '@_linked/cli/utils';
 import type { LinkedConfig } from '@_linked/cli/interfaces';
 import { AppContextProvider } from '@_linked/server-utils/components/AppContext';
@@ -330,136 +333,12 @@ export class LincdServer extends Shape {
       this.server.use(viteMiddleware);
     }
 
-    // if development, run webpack from the server
-    // for production you need to build the bundles before starting the server
-    const skipBuild =
-      process.env.NO_WEBPACK === 'true' || !!viteMiddleware;
-    if (isDevelopment && !skipBuild) {
-      //three levels up because of lib/esm (2) instead of src (1)
-      //@ts-ignore
-      // const getWebpackConfig = (await import('../../../site.webpack.config.cjs')).default;
-      // let webpackConfig = await getWebpackConfig();
-      let webpackConfig = await getWebpackAppConfig();
-
-      // const compare = (c1,c2,path?='') => {
-      //   for(let key1 of Object.keys(c1)) {
-      //     if(typeof c1[key1] === 'object') {
-      //       compare(c1[key1],c2[key1],path+='.'+key1);
-      //     } else {
-      //       if(c1[key1] !== c2[key1]) {
-      //         console.log("Difference "+path+": ");
-      //         console.log(c1[key1]);
-      //         console.log(c2[key1]);
-      //       }
-      //     }
-      //   }
-      // }
-      // compare(webpackConfig,webpackConfig2);
-
-      //default to having webpack cache on and filesystem, unless explicitly set to false
-      if (this.cacheWebpack === false) {
-        webpackConfig.cache.type = 'memory';
-      } else {
-        webpackConfig.cache.type = 'filesystem';
-      }
-      //clean dist/build folder
-      await rimraf(webpackConfig.output.path).catch((err) => {
-        if (err) {
-          console.warn(err);
-        }
-      });
-
-      const compiler = webpack(webpackConfig as any, (err, stats) => {
-        //watch build completed
-        if (err) {
-          console.error(err);
-        }
-
-        // Output stats JSON for analysis
-        if (this.analyse) {
-          fs.writeFile(
-            './data/webpack-stats.json',
-            JSON.stringify(stats.toJson({ all: true }), null, 2)
-          ).then(() => {
-            console.log('Webpack stats written to ./data/webpack-stats.json');
-          });
-        }
-      });
-
-      if (!compiler) {
-        //something went wrong with webpack config, error will be logged above
-        return;
-      }
-
-      compiler.hooks.afterEmit.tap('cleanup-the-require-cache', () => {
-        // After webpack rebuild, clear the files from the require cache,
-        // so that next server side render wil be in sync
-        // console.log(Object.keys(require.cache).filter(k => k.includes(dirName)).join("\n"));
-        // if (typeof require !== 'undefined') {
-        //   Object.keys(require.cache)
-        //     .filter((key) => key.includes(dirName))
-        //     .forEach((key) => delete require.cache[key]);
-        // }
-      });
-
-      //after the first emit (which means bundles are ready and the site is running) also rebuild the index files of the site
-      let updatedMetadata = false;
-      compiler.hooks.afterEmit.tap('update-metadata', () => {
-        if (!updatedMetadata) {
-          updatedMetadata = true;
-          //log updated paths
-          // buildMetadata()
-          //   .then((updatedPaths) => {
-          //     // if(updatedPaths && updatedPaths.length)
-          //     // {
-          //     //   console.log(chalk.blueBright('Updated metadata:\n - '+updatedPaths.join('\n - ')));
-          //     // }
-          //   })
-          //   .catch((err) => {
-          //     console.warn('Could not update metadata: ' + err);
-          //   });
-        }
-      });
-
-      this.server.use(
-        webpackDevMiddleware(compiler, {
-          serverSideRender: true,
-          publicPath: webpackConfig.output.publicPath,
-          stats: {
-            children: true,
-            version: false,
-            chunks: false,
-            assets: false,
-            entrypoints: false,
-            modules: false,
-          },
-          writeToDisk: true,
-        })
-      );
-      compiler.hooks.afterEmit.tap('store-manifest', (compilation) => {
-        try {
-          // Read manifest from the filesystem after webpack writes it
-          const manifestPath = path.resolve(
-            compilation.options.output.path,
-            'manifest.json'
-          );
-          if (fsNative.existsSync(manifestPath)) {
-            const manifestContent = fsNative.readFileSync(
-              manifestPath,
-              'utf-8'
-            );
-            this.latestManifest = JSON.parse(manifestContent);
-          }
-        } catch (err) {
-          console.warn('Failed to parse manifest from webpack emit:', err);
-        }
-      });
-      this.server.use(
-        webpackHotMiddleware(compiler, {
-          log: false,
-        })
-      );
-    }
+    // Plan-011: legacy webpack-dev-middleware branch removed. Under Vite
+    // (the only supported dev path now) `viteMiddleware` is set, which
+    // previously forced `skipBuild = true` and made this whole block
+    // dead. Removing it ends the static dependency on @_linked/cli/
+    // config-webpack-app (full of dynamic imports Vite couldn't analyze)
+    // and shrinks LincdServer's import surface considerably.
 
     // //map URL routes to file paths
     const oneYear = 1000 * 60 * 60 * 24 * 365; // in milliseconds
@@ -1001,7 +880,10 @@ export class LincdServer extends Shape {
       //@ts-ignore
       //   await import.meta.resolve(pkg)
       // );
-      await import(pkg);
+      // @vite-ignore — dynamic specifier is intentional: this checks
+      // whether `pkg` is resolvable at runtime, then catches the error.
+      // eslint-disable-next-line no-unsanitized/method
+      await import(/* @vite-ignore */ pkg);
       // console.log(`✅ Successfully loaded: ${pkg}`);
     } catch (e) {
       let providerNotFound =
@@ -1059,13 +941,43 @@ export class LincdServer extends Shape {
         if (specifier === `${this.package.name}/backend`) {
           return await vite.ssrLoadModule('/src/backend.ts');
         }
-        // For installed packages, fall back to Node's import resolver:
-        // workspace packages are externalized by Vite (see vite-config.ts
-        // ssr block) so they load via Node anyway. Many packages have no
-        // /backend export — the surrounding catch handles ERR_MODULE_NOT_FOUND.
-        return await import(specifier);
+        // Plan-011: ssr.external is now an npm-only allowlist. Workspace
+        // packages MUST go through Vite's SSR loader so they share the
+        // same module instance as everything else in the SSR call graph
+        // (otherwise we get duplicate React contexts, duplicate Linked
+        // package registrations, etc).
+        //
+        // Pre-check whether the specifier actually resolves before
+        // calling ssrLoadModule — many packages have no `/backend`
+        // export, and ssrLoadModule logs a "Failed to load url" error
+        // INTERNALLY before throwing, which spams stdout even when the
+        // surrounding catch handles it. pluginContainer.resolveId is
+        // quiet: it returns null when no plugin can resolve the id.
+        try {
+          const resolved = await vite.pluginContainer?.resolveId?.(specifier);
+          if (!resolved) {
+            // Synthesise the same error shape the catch expects so the
+            // "no backend export, that's fine" branch fires.
+            const err: any = new Error(
+              `Failed to load url ${specifier} (resolved id: ${specifier}). Does the file exist?`,
+            );
+            throw err;
+          }
+        } catch (e: any) {
+          // If the pre-check itself errored (e.g. plugin threw on a
+          // pkg name it doesn't know), let the call below surface the
+          // real error path.
+          if (!e?.message?.includes('Failed to load url')) {
+            // fall through to ssrLoadModule which will throw + log
+          } else {
+            throw e;
+          }
+        }
+        return await vite.ssrLoadModule(specifier);
       }
-      return await import(specifier);
+      // No-vite path (e.g. production runtime). Fall back to Node's
+      // resolver. The dynamic specifier is intentional.
+      return await import(/* @vite-ignore */ specifier);
     };
     await loadModule(backendIndexFilePath)
       .then((backendProviderExports) => {
@@ -1097,14 +1009,24 @@ export class LincdServer extends Shape {
         });
       })
       .catch((e) => {
-        const match = e.message.match(/module \'([^\']+)'/);
-        //check that the imported /backend path is not found (and only that path, not an import IN that file that is not found, that should still throw an error)
+        // Recognize "no /backend export" failures across two loader
+        // shapes:
+        //   Node's import()             → ERR_MODULE_NOT_FOUND + "Cannot find module 'X/backend'"
+        //   Vite's ssrLoadModule()      → "Failed to load url X/backend"
+        // In either case, missing /backend on a package that doesn't
+        // ship a backend is expected; loud-error only on REAL load
+        // failures (syntax error inside an existing backend.ts, etc).
+        const nodeMatch = e.message.match(/module \'([^\']+)'/);
+        const viteMatch = e.message.match(/Failed to load url ([^\s]+)/);
+        const matchedSpec = nodeMatch?.[1] ?? viteMatch?.[1];
         let providerNotFound =
-          e.code === 'ERR_MODULE_NOT_FOUND' &&
-          e.message.indexOf(`Cannot find module`) !== -1 &&
-          match &&
-          match[1] &&
-          match[1].includes('/backend');
+          !!matchedSpec &&
+          matchedSpec.includes('/backend') &&
+          (
+            (e.code === 'ERR_MODULE_NOT_FOUND' &&
+              e.message.indexOf(`Cannot find module`) !== -1) ||
+            e.message.indexOf('Failed to load url') !== -1
+          );
         if (providerNotFound) {
           // console.warn('Error loading ' + providerPath + ': ' + e.stack);
           if (warnIfNotFound) {
