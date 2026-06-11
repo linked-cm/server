@@ -1130,6 +1130,56 @@ export class LincdServer extends Shape {
     return { backendProviderExports, shapeProviders };
   }
 
+  /**
+   * Plan-011 phase 2 — HMR re-index entry point.
+   *
+   * Called by the CLI orchestrator's Vite watcher whenever a `.ts`/`.tsx`
+   * file inside a workspace package changes. Disposes the package's
+   * existing providers (so routes, listeners, timers don't accumulate),
+   * drops them from the registry, and re-runs indexPackageBackendProviders
+   * to pick up the freshly-imported module.
+   *
+   * Dispose calls have a 5 s soft timeout. A hanging dispose logs a
+   * warning and is abandoned so HMR doesn't stall the whole dev loop.
+   */
+  async onSourceChange(pkg: string): Promise<void> {
+    const disposeWithTimeout = async (p: any, label: string) => {
+      if (!p?.dispose) return;
+      try {
+        await Promise.race([
+          Promise.resolve().then(() => p.dispose()),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error(`dispose timeout after 5s`)),
+              5000
+            )
+          ),
+        ]);
+      } catch (err: any) {
+        console.warn(
+          chalk.yellow(`[linked] ${label} dispose failed: ${err.message}`)
+        );
+      }
+    };
+
+    const generic = this.genericProviders.get(pkg);
+    if (generic) {
+      await disposeWithTimeout(generic, `${pkg} generic provider`);
+      this.genericProviders.delete(pkg);
+    }
+
+    const shapeProvs = this.shapeProviders.get(pkg) ?? [];
+    for (const p of shapeProvs) {
+      await disposeWithTimeout(
+        p,
+        `${pkg} ${Object.getPrototypeOf(p)?.constructor?.name ?? 'shape provider'}`
+      );
+    }
+    this.shapeProviders.delete(pkg);
+
+    await this.indexPackageBackendProviders(pkg, true);
+  }
+
   async processBackendMethodCall(request, response) {
     this.noCache(response);
     await this.initRequest(request, response);
