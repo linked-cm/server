@@ -1178,6 +1178,37 @@ export class LincdServer extends Shape {
     this.shapeProviders.delete(pkg);
 
     await this.indexPackageBackendProviders(pkg, true);
+
+    // Run the boot lifecycle on the FRESHLY-loaded provider so it
+    // re-registers its Express routes/middleware after dispose. Without
+    // this, dispose() tears the old routes off and the new instance is
+    // constructed but never gets a chance to register the replacements.
+    const fresh = this.genericProviders.get(pkg);
+    if (fresh?.setupBeforeControllers) {
+      try {
+        await fresh.setupBeforeControllers();
+      } catch (err: any) {
+        console.warn(
+          chalk.yellow(
+            `[linked] ${pkg} setupBeforeControllers after reload failed: ${err.message}`
+          )
+        );
+      }
+    }
+    const freshShapes = this.shapeProviders.get(pkg) ?? [];
+    for (const p of freshShapes) {
+      if (p?.setupBeforeControllers) {
+        try {
+          await p.setupBeforeControllers();
+        } catch (err: any) {
+          console.warn(
+            chalk.yellow(
+              `[linked] ${pkg} shape-provider setupBeforeControllers after reload failed: ${err.message}`
+            )
+          );
+        }
+      }
+    }
   }
 
   async processBackendMethodCall(request, response) {
