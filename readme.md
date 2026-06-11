@@ -17,6 +17,10 @@ If you want to further adjust the functionality of LincdServer yourself, either 
   - [Shape providers](#shape-providers)
   - [Generic backend providers](#generic-backend-providers)
   - [Gotchas](#gotchas)
+- [Provider lifecycle and HMR](#provider-lifecycle-and-hmr)
+  - [When to implement `dispose()`](#when-to-implement-dispose)
+  - [Route tracking helpers](#route-tracking-helpers)
+  - [Examples](#examples)
 - [Shapes](#shapes)
   - [LocalFileStore](#localfilestore)
 - [TODO](#todo)
@@ -171,6 +175,102 @@ then make sure that the `packageName` you pass to `Server.call(packageName)` is 
 where the provider lives. Generally, this means you call `Server.call` from a component in the same package as the
 Provider (and import packageName from `src/package.ts`). If you want to call a method from another package, then import
 packageName from that package, or manually type it.
+
+## Provider lifecycle and HMR
+
+Every provider — generic (`BackendProvider`) or shape-scoped (`ShapeProvider`) — has a lifecycle the framework drives:
+
+1. **Construction** — `LincdServer.indexPackageBackendProviders(pkg)` reads `${pkg}/backend`, finds every exported provider class, calls `new providerClass(server, lincdServer)` for each.
+2. **Boot hooks** — `setupBeforeControllers()`, `setupBeforeCatchAllControllers()`, `setupAfterControllers()` run in that order during server startup.
+3. **Per-request** — `initRequest(req, res)` then `supplyDataForRequest(req, res, data)` on every incoming request.
+4. **Dispose** — `dispose()` runs when the provider is being torn down. In dev mode this happens on HMR (a watched source file in the same package changed) and on graceful shutdown. In production it only runs on shutdown.
+
+The dispose step is what makes hot-reload safe. Without it, anything the constructor or boot hooks registered — Express routes, middleware, listeners, timers, global-singleton mutations — would accumulate every time the source file changed. The framework calls `dispose()` on the OLD provider before replacing it with a freshly-instantiated one.
+
+### When to implement `dispose()`
+
+Implement `dispose()` when your provider does any of the following at construction or boot:
+
+- Registers Express routes (`this.server.get/post/...`) or middleware (`this.server.use(...)`).
+- Holds `setInterval` / `setTimeout` handles.
+- Subscribes to event listeners (LINCD events like `onAccountWillBeRemoved`, or any `EventEmitter`-style API).
+- Mutates a global singleton (e.g. `LinkedStorage.setDefaultDataset(...)`, `Auth.userType = ...`).
+- Opens long-lived connections (DB pools, WebSockets) that the framework can't close on its own.
+
+If your provider only exports class definitions or implements stateless RPC methods, you don't need to override `dispose()` — the base class's no-op is correct.
+
+### Route tracking helpers
+
+`BackendProvider` ships two protected helpers to make route disposal one line:
+
+```typescript
+protected registerRoute(
+  method: 'get' | 'post' | 'put' | 'delete' | 'patch' | 'use',
+  path: string,
+  handler: express.RequestHandler,
+): void;
+
+protected disposeRoutes(): void;
+```
+
+`registerRoute()` does the underlying `this.server.<method>(path, handler)` call AND pushes the entry onto `this.trackedRoutes`. `disposeRoutes()` walks `this.server._router.stack` and splices out every layer the provider registered.
+
+For middleware (`method === 'use'`), pass `'/'` as the path to mount globally. Specific mount paths are also supported.
+
+### Examples
+
+**A route-registering provider:**
+
+```typescript
+export default class MyProvider extends BackendProvider {
+  setupBeforeControllers() {
+    this.registerRoute('get', '/api/things', async (_req, res) => {
+      res.json({things: await Thing.getAll()});
+    });
+    this.registerRoute('post', '/api/things', async (req, res) => {
+      const t = await Thing.create(req.body);
+      res.json(t);
+    });
+  }
+
+  async dispose() {
+    this.disposeRoutes();
+  }
+}
+```
+
+**A stateful provider with a timer and a listener:**
+
+```typescript
+export default class CacheProvider extends BackendProvider {
+  private refreshTimer?: NodeJS.Timeout;
+  private invalidationListener?: (id: string) => void;
+  private cache = new Map<string, any>();
+
+  constructor(s: any, ls: any) {
+    super(s, ls);
+    this.refreshTimer = setInterval(() => this.refresh(), 60_000);
+    this.invalidationListener = (id) => this.cache.delete(id);
+    someEvents.on('thing-changed', this.invalidationListener);
+  }
+
+  async dispose() {
+    if (this.refreshTimer) clearInterval(this.refreshTimer);
+    if (this.invalidationListener) {
+      someEvents.off('thing-changed', this.invalidationListener);
+    }
+    this.cache.clear();
+  }
+
+  async refresh() { /* ... */ }
+}
+```
+
+**A provider that mutates a global singleton:**
+
+Such singletons (e.g. `LinkedStorage.setDefaultDataset`) often hold live connections that survive HMR by design — recreating them every reload would tear down working DB handles. Do NOT undo the mutation in `dispose()`; document that this part of the provider only updates on full restart (the `r<enter>` shortcut in `linked start`).
+
+> **Note on disposal time:** if your `dispose()` takes longer than ~5 seconds it will be abandoned with a warning so HMR doesn't stall the dev loop. In-flight requests held by the old provider keep running on the old code; new requests hit the new instance.
 
 ## Shapes
 
