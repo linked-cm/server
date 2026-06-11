@@ -1451,6 +1451,15 @@ export class LincdServer extends Shape {
     if (vite?.moduleGraph?.idToModuleMap) {
       const cssChunks: string[] = [];
       const seen = new Set<string>();
+      // Walk the moduleGraph for CSS modules pulled in by app/pages.
+      // Note: Tailwind v4 `@theme` directives in app theme CSS files are
+      // NOT processed at SSR collection time — the @tailwindcss/vite
+      // plugin expands them at production build only. In dev mode, the
+      // theme variables (—color-primary-*, etc.) are injected by Vite's
+      // runtime AFTER client hydration, which causes a brief flash of
+      // unthemed content (logos render black until ~hydration+200ms).
+      // Production (vite build) is unaffected — the static main.css
+      // contains expanded :root variables.
       for (const [id] of vite.moduleGraph.idToModuleMap as Map<
         string,
         any
