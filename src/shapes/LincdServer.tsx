@@ -907,10 +907,23 @@ export class LincdServer extends Shape {
       //@ts-ignore
       //   await import.meta.resolve(pkg)
       // );
-      // @vite-ignore — dynamic specifier is intentional: this checks
-      // whether `pkg` is resolvable at runtime, then catches the error.
-      // eslint-disable-next-line no-unsanitized/method
-      await import(/* @vite-ignore */ pkg);
+      // plan-011 §P6 — prefer Vite's SSR loader so workspace packages resolve
+      // via their `development`→src condition and register on the SINGLE
+      // @_linked/core instance the rest of the SSR graph uses. The bare Node
+      // `import()` below resolves the `default`→lib condition, which evaluates
+      // a SECOND core copy (harmless since initTree is idempotent, but a needless
+      // second instance with its own LinkedStorage static state). Node import
+      // stays as the fallback when Vite isn't active (production / Node-only CLI
+      // commands like `script`/`call`). Mirrors indexPackageBackendProviders.
+      const vite: any = (this.config.server as any)?.vite;
+      if (vite && typeof vite.ssrLoadModule === 'function') {
+        await vite.ssrLoadModule(pkg);
+      } else {
+        // @vite-ignore — dynamic specifier is intentional: this checks
+        // whether `pkg` is resolvable at runtime, then catches the error.
+        // eslint-disable-next-line no-unsanitized/method
+        await import(/* @vite-ignore */ pkg);
+      }
       // console.log(`✅ Successfully loaded: ${pkg}`);
     } catch (e) {
       let providerNotFound =
