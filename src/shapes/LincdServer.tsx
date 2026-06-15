@@ -435,6 +435,33 @@ export class LincdServer extends Shape {
       res.sendStatus(200);
     });
 
+    // CN control channel (plan-010 T1b.3). Present only when CN spawned this
+    // process with a shared secret (CN_APP_ADMIN_SECRET); a standalone app run
+    // without the secret leaves the channel closed (404). Auth is the
+    // x-cn-admin-secret header matching that env value.
+    const adminSecret = process.env.CN_APP_ADMIN_SECRET;
+    const requireAdmin = (req: express.Request, res: express.Response): boolean => {
+      if (!adminSecret) {
+        res.sendStatus(404); // no control channel in this mode
+        return false;
+      }
+      if (req.get('x-cn-admin-secret') !== adminSecret) {
+        res.sendStatus(401);
+        return false;
+      }
+      return true;
+    };
+    this.server.get('/admin/health', (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      res.status(200).json({ status: 'ok' });
+    });
+    this.server.post('/admin/restart', (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      res.sendStatus(202);
+      // CN's provisioner respawns on exit (see ChildProcessProvisioner).
+      setTimeout(() => process.exit(0), 50);
+    });
+
     this.server.get(
       '*',
       this.handleErrors(async (req, res) => {
