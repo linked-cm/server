@@ -907,21 +907,21 @@ export class LincdServer extends Shape {
       //@ts-ignore
       //   await import.meta.resolve(pkg)
       // );
-      // plan-011 §P6 (reverted) — routing this through vite.ssrLoadModule would
-      // give a literal single @_linked/core instance, BUT it pulls legacy
-      // `lincd-mui-base` (a real dep of @_linked/auth's form components) into
-      // Vite's CSS-aware graph, where its broken `./scss/variables.css` import
-      // fails to load. The bare Node import resolves `default`→lib and tolerates
-      // that (the package registers via the shared lincd registry). The second
-      // lib-core copy this creates is benign — §P1's idempotent initTree
-      // neutralizes it (0 crashes), and §P5 already guarantees storage config +
-      // CN providers share ONE instance (contract C1). Fully eliminating the
-      // second copy is gated on migrating @_linked/auth off lincd-mui-base
-      // (legacy-eradication track) — see Iteration 1 follow-up.
-      // @vite-ignore — dynamic specifier is intentional: this checks
-      // whether `pkg` is resolvable at runtime, then catches the error.
-      // eslint-disable-next-line no-unsanitized/method
-      await import(/* @vite-ignore */ pkg);
+      // plan-011 §P6 — prefer Vite's SSR loader so workspace packages register
+      // on the SINGLE @_linked/core instance the rest of the SSR graph uses.
+      // The bare Node `import()` fallback resolves `default`→lib, evaluating a
+      // SECOND core copy (benign post-§P1, but a needless second instance).
+      // Node import stays as the fallback when Vite isn't active (production /
+      // Node-only CLI commands). Mirrors indexPackageBackendProviders.
+      const vite: any = (this.config.server as any)?.vite;
+      if (vite && typeof vite.ssrLoadModule === 'function') {
+        await vite.ssrLoadModule(pkg);
+      } else {
+        // @vite-ignore — dynamic specifier is intentional: this checks
+        // whether `pkg` is resolvable at runtime, then catches the error.
+        // eslint-disable-next-line no-unsanitized/method
+        await import(/* @vite-ignore */ pkg);
+      }
       // console.log(`✅ Successfully loaded: ${pkg}`);
     } catch (e) {
       let providerNotFound =
