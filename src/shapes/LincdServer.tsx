@@ -1,5 +1,6 @@
 'use strict';
 import chalk from 'chalk';
+import { timingSafeEqual } from 'crypto';
 import events from 'events';
 import express, { Express as ExpressServer } from 'express';
 import fetchCookie from 'fetch-cookie';
@@ -440,12 +441,20 @@ export class LincdServer extends Shape {
     // without the secret leaves the channel closed (404). Auth is the
     // x-cn-admin-secret header matching that env value.
     const adminSecret = process.env.CN_APP_ADMIN_SECRET;
+    // Constant-time compare so the secret can't be recovered by timing the 401
+    // response. timingSafeEqual requires equal-length buffers, so guard length.
+    const secretMatches = (provided: string | undefined): boolean => {
+      if (!adminSecret || !provided) return false;
+      const a = Buffer.from(provided);
+      const b = Buffer.from(adminSecret);
+      return a.length === b.length && timingSafeEqual(a, b);
+    };
     const requireAdmin = (req: express.Request, res: express.Response): boolean => {
       if (!adminSecret) {
         res.sendStatus(404); // no control channel in this mode
         return false;
       }
-      if (req.get('x-cn-admin-secret') !== adminSecret) {
+      if (!secretMatches(req.get('x-cn-admin-secret'))) {
         res.sendStatus(401);
         return false;
       }
