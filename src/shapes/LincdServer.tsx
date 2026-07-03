@@ -217,6 +217,12 @@ export class LincdServer extends Shape {
    * here — it materializes its own pinned native shapes in its storage config.
    */
   private async materializeShapesIntoStore(): Promise<void> {
+    // Opt-out: an app that manages its own dataset/shape lifecycle (e.g. an
+    // ejected app switching git branches by hand) can disable boot materialization
+    // with LINKED_SYNC_SHAPES_ON_BOOT=false. Default on.
+    if (process.env.LINKED_SYNC_SHAPES_ON_BOOT === 'false') {
+      return;
+    }
     const def = LinkedStorage.getDefaultDataset() as
       | {rawQuery?: unknown}
       | undefined;
