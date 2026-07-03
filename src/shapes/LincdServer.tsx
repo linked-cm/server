@@ -44,7 +44,7 @@ import webpackDevMiddleware from 'webpack-dev-middleware';
 import webpackHotMiddleware from 'webpack-hot-middleware';
 import { lincdServer } from '../ontologies/lincd-server.js';
 import { linkedShape } from '../package.js';
-import { syncShapes } from '../utils/Shapes.js';
+import { indexShapesIntoMemory } from '../utils/Shapes.js';
 import { LincdAPI } from './LincdAPI.js';
 import type { RoutesConfig, RouteConfig } from '../types/RouteConfig.js';
 
@@ -197,8 +197,46 @@ export class LincdServer extends Shape {
 
     await this.initBackendProviders();
 
-    syncShapes();
+    indexShapesIntoMemory();
+    await this.materializeShapesIntoStore();
     return this;
+  }
+
+  /**
+   * Materialize this server's registered shapes into the RDF store as SHACL
+   * (core `syncShapes` → pure `sh:NodeShape` + property shapes), so a running
+   * app's app-data holds the shapes its instances validate/query against
+   * (plan-010 T1e.2). This is the canonical, uniform reuse+create mechanism:
+   * whatever shapes the app package registers (published re-exports + generated)
+   * get materialized on boot (and re-run on shape-file HMR).
+   *
+   * Gated to servers whose DEFAULT dataset is a **concrete** materializable store
+   * (detected via `rawQuery`) — i.e. an app pointing at its app-data FusekiStore.
+   * CN's default is the context-routing `AppDataRouter` (no `rawQuery`; a bare
+   * `syncShapes` orphan-read would throw with no active project), so CN is skipped
+   * here — it materializes its own pinned native shapes in its storage config.
+   */
+  private async materializeShapesIntoStore(): Promise<void> {
+    const def = LinkedStorage.getDefaultDataset() as
+      | {rawQuery?: unknown}
+      | undefined;
+    if (!def || typeof def.rawQuery !== 'function') {
+      return; // context-router default (e.g. CN's AppDataRouter) — skip
+    }
+    try {
+      const {syncShapes} = await import('@_linked/core');
+      const thunks = await syncShapes();
+      // Batched (not all-at-once) so we don't overwhelm Fuseki — the API hands
+      // back unexecuted thunks precisely so the caller paces them.
+      for (let i = 0; i < thunks.length; i += 8) {
+        await Promise.all(thunks.slice(i, i + 8).map((run) => run()));
+      }
+      console.log(
+        `[LincdServer] materialized ${thunks.length} shape(s) into the app-data store`,
+      );
+    } catch (err) {
+      console.warn('[LincdServer] shape materialization failed (non-fatal):', err);
+    }
   }
 
   // async serveData(req,res) {
@@ -304,7 +342,8 @@ export class LincdServer extends Shape {
     // before controllers
     await this.initBackendProviders();
 
-    syncShapes();
+    indexShapesIntoMemory();
+    await this.materializeShapesIntoStore();
 
     //START OF EXPRESS ROUTES AND MIDDLEWARE
 
