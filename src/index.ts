@@ -2,7 +2,7 @@ import './types.js';
 import './ontologies/lincd-server.js';
 
 //SHAPES FIRST
-import './shapes/LincdServer.js';
+import './shapes/LinkedServer.js';
 import './shapes/LincdAPI.js';
 import './shapes/quadstores/BackendAPIStore.js';
 import './shapes/filestores/LocalFileStore.js';

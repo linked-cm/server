@@ -39,9 +39,6 @@ import { rimraf } from 'rimraf';
 import sharp from 'sharp';
 import { Transform } from 'stream';
 import { CookieJar } from 'tough-cookie';
-import webpack from 'webpack';
-import webpackDevMiddleware from 'webpack-dev-middleware';
-import webpackHotMiddleware from 'webpack-hot-middleware';
 import { lincdServer } from '../ontologies/lincd-server.js';
 import { linkedShape } from '../package.js';
 import { indexShapesIntoMemory } from '../utils/Shapes.js';
@@ -95,7 +92,7 @@ global['reactStaticRenderer'] = renderToStaticMarkup;
 autoLoadOntologyData(true);
 
 @linkedShape
-export class LincdServer extends Shape {
+export class LinkedServer extends Shape {
   /**
    * indicates that instances of this shape need to have this rdf.type
    */
@@ -276,11 +273,8 @@ export class LincdServer extends Shape {
     const staticAsset = (assetPath: string) =>
       `${staticAccessURL}/public${assetPath}`;
 
-    // Bundle/manifest reads handle BOTH formats during the plan-010
-    // Vite migration window:
-    //   - Vite manifest at public/bundles/.vite/manifest.json (new)
-    //   - Webpack manifest at public/bundles/manifest.json (legacy)
-    // First found wins. Vite is preferred when both exist.
+    // Bundle/manifest read (plan-011: Vite is the only supported build).
+    // Vite manifest lives at public/bundles/.vite/manifest.json.
     this.assets = {
       'main.js':
         staticAsset('/bundles/main.bundle.js') + '?v=' + this.package.version,
@@ -290,10 +284,6 @@ export class LincdServer extends Shape {
       const viteManifestPath = path.resolve(
         process.cwd(),
         'public/bundles/.vite/manifest.json'
-      );
-      const webpackManifestPath = path.resolve(
-        process.cwd(),
-        'public/bundles/manifest.json'
       );
       if (fsNative.existsSync(viteManifestPath)) {
         const manifestRaw = fsNative.readFileSync(viteManifestPath, 'utf-8');
@@ -311,9 +301,6 @@ export class LincdServer extends Shape {
         if (mainEntry?.css?.[0]) {
           this.assets['main.css'] = staticAsset(`/bundles/${mainEntry.css[0]}`);
         }
-      } else if (fsNative.existsSync(webpackManifestPath)) {
-        const manifestRaw = fsNative.readFileSync(webpackManifestPath, 'utf-8');
-        this.assets.manifest = JSON.parse(manifestRaw);
       }
     } catch (err) {
       console.warn('Could not load bundle manifest:', err);
@@ -388,7 +375,7 @@ export class LincdServer extends Shape {
     // previously forced `skipBuild = true` and made this whole block
     // dead. Removing it ends the static dependency on @_linked/cli/
     // config-webpack-app (full of dynamic imports Vite couldn't analyze)
-    // and shrinks LincdServer's import surface considerably.
+    // and shrinks LinkedServer's import surface considerably.
 
     // //map URL routes to file paths
     const oneYear = 1000 * 60 * 60 * 24 * 365; // in milliseconds
