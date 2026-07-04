@@ -217,31 +217,35 @@ export class LincdServer extends Shape {
    * here — it materializes its own pinned native shapes in its storage config.
    */
   private async materializeShapesIntoStore(): Promise<void> {
-    // Opt-out: an app that manages its own dataset/shape lifecycle (e.g. an
-    // ejected app switching git branches by hand) can disable boot materialization
-    // with LINKED_SYNC_SHAPES_ON_BOOT=false. Default on.
-    if (process.env.LINKED_SYNC_SHAPES_ON_BOOT === 'false') {
+    // Opt-out via `linked.config` `syncShapesOnBoot` (default true); env
+    // LINKED_SYNC_SHAPES_ON_BOOT overrides for deployment. CN sets
+    // `syncShapesOnBoot: false` in its own linked.config — its default dataset is
+    // a context-router that can't materialize context-free, and it syncs its own
+    // pinned shapes separately (linked.backend.storage.js).
+    const configFlag = (this.config as any)?.syncShapesOnBoot;
+    const envFlag = process.env.LINKED_SYNC_SHAPES_ON_BOOT;
+    if (configFlag === false || envFlag === 'false') {
       return;
     }
-    const def = LinkedStorage.getDefaultDataset() as
-      | {rawQuery?: unknown}
-      | undefined;
-    if (!def || typeof def.rawQuery !== 'function') {
-      return; // context-router default (e.g. CN's AppDataRouter) — skip
-    }
+    const appData = LinkedStorage.getDefaultDataset();
+    if (!appData) return;
     try {
       const {syncShapes} = await import('@_linked/core');
-      const thunks = await syncShapes();
+      // Explicit target: materialize EVERY registered shape into the app's own
+      // data store regardless of per-shape routing/pins — syncShapes(ds) threads
+      // ds through the orphan-read + every delete→recreate. (No reliance on
+      // "whatever the default resolves to per shape".)
+      const thunks = await syncShapes(appData as any);
       // Batched (not all-at-once) so we don't overwhelm Fuseki — the API hands
       // back unexecuted thunks precisely so the caller paces them.
       for (let i = 0; i < thunks.length; i += 8) {
         await Promise.all(thunks.slice(i, i + 8).map((run) => run()));
       }
       console.log(
-        `[LincdServer] materialized ${thunks.length} shape(s) into the app-data store`,
+        `[LinkedServer] materialized ${thunks.length} shape(s) into app-data`,
       );
     } catch (err) {
-      console.warn('[LincdServer] shape materialization failed (non-fatal):', err);
+      console.warn('[LinkedServer] shape materialization failed (non-fatal):', err);
     }
   }
 
