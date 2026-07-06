@@ -2,8 +2,9 @@
  * Shape metadata index builder (backend-only).
  *
  * Types and read-only access (ShapeDetails, PropertyDetails, getShapeIndex)
- * are in @_linked/server-utils. This module provides syncShapes() which
- * populates the shared index at startup.
+ * are in @_linked/server-utils. This module provides indexShapesIntoMemory()
+ * which populates the shared in-memory index at startup. (Distinct from core's
+ * `syncShapes`, which materializes shapes into the RDF store as SHACL.)
  */
 import { NodeShape, getNodeShapeUri } from '@_linked/core/shapes/SHACL';
 import { getAllShapeClasses } from '@_linked/core/utils/ShapeClass';
@@ -33,7 +34,7 @@ function pathToIndexValue(path: PathExpr): { id: string } | { id: string }[] {
  * Build the shape index from locally-registered NodeShape instances.
  * Backend-only — populates the shared shapeIndex from @_linked/server-utils.
  */
-export async function syncShapes() {
+export async function indexShapesIntoMemory() {
   const allShapeClasses = getAllShapeClasses();
 
   for (let [_uri, shapeClass] of allShapeClasses) {

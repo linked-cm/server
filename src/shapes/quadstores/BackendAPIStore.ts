@@ -62,23 +62,22 @@ export class BackendAPIStore extends Shape implements IDataset {
     // No initialization needed — queries are routed to the backend
   }
 
+  // Queries serialize to DSL-JSON for the wire (core 2.10.0 contract flip): the
+  // live (closed) query can't cross Server.call as-is, so we ship `toJSON()` and
+  // the BackendAPIStoreProvider rehydrates with `fromJSON()` on the backend.
   selectQuery(query: SelectQuery): Promise<SelectResult> {
-    const queryObj =
-      typeof (query as any).getQueryObject === 'function'
-        ? (query as any).getQueryObject()
-        : query;
-    return Server.call(this, 'selectQuery', queryObj) as Promise<SelectResult>;
+    return Server.call(this, 'selectQuery', query.toJSON()) as Promise<SelectResult>;
   }
 
   updateQuery(query: UpdateQuery): Promise<UpdateResult> {
-    return Server.call(this, 'updateQuery', query) as Promise<UpdateResult>;
+    return Server.call(this, 'updateQuery', query.toJSON()) as Promise<UpdateResult>;
   }
 
   createQuery(query: CreateQuery): Promise<CreateResult> {
-    return Server.call(this, 'createQuery', query) as Promise<CreateResult>;
+    return Server.call(this, 'createQuery', query.toJSON()) as Promise<CreateResult>;
   }
 
   deleteQuery(query: DeleteQuery): Promise<DeleteResponse> {
-    return Server.call(this, 'deleteQuery', query) as Promise<DeleteResponse>;
+    return Server.call(this, 'deleteQuery', query.toJSON()) as Promise<DeleteResponse>;
   }
 }

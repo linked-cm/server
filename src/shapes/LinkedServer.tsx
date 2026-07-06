@@ -1,13 +1,17 @@
 'use strict';
 import chalk from 'chalk';
+import { timingSafeEqual } from 'crypto';
 import events from 'events';
 import express, { Express as ExpressServer } from 'express';
 import fetchCookie from 'fetch-cookie';
 import * as fsNative from 'fs';
 import * as fs from 'fs/promises';
 import { Server as HttpServer } from 'http';
-import { getWebpackAppConfig } from '@_linked/cli/config-webpack-app';
-import { getLincdPackages } from '@_linked/cli/cli-methods';
+// Plan-011: imports from @_linked/cli now go through ./lifecycle (a
+// dynamic-import-free file) so Vite's SSR module graph doesn't pull
+// in the legacy webpack flow and emit dozens of unanalyzable-import
+// warnings on every boot.
+import { getLincdPackages } from '@_linked/cli/lifecycle';
 import { getPackageJSON } from '@_linked/cli/utils';
 import type { LinkedConfig } from '@_linked/cli/interfaces';
 import { AppContextProvider } from '@_linked/server-utils/components/AppContext';
@@ -35,12 +39,9 @@ import { rimraf } from 'rimraf';
 import sharp from 'sharp';
 import { Transform } from 'stream';
 import { CookieJar } from 'tough-cookie';
-import webpack from 'webpack';
-import webpackDevMiddleware from 'webpack-dev-middleware';
-import webpackHotMiddleware from 'webpack-hot-middleware';
 import { lincdServer } from '../ontologies/lincd-server.js';
 import { linkedShape } from '../package.js';
-import { syncShapes } from '../utils/Shapes.js';
+import { indexShapesIntoMemory } from '../utils/Shapes.js';
 import { LincdAPI } from './LincdAPI.js';
 import type { RoutesConfig, RouteConfig } from '../types/RouteConfig.js';
 
@@ -91,7 +92,7 @@ global['reactStaticRenderer'] = renderToStaticMarkup;
 autoLoadOntologyData(true);
 
 @linkedShape
-export class LincdServer extends Shape {
+export class LinkedServer extends Shape {
   /**
    * indicates that instances of this shape need to have this rdf.type
    */
@@ -193,8 +194,56 @@ export class LincdServer extends Shape {
 
     await this.initBackendProviders();
 
-    syncShapes();
+    indexShapesIntoMemory();
+    await this.materializeShapesIntoStore();
     return this;
+  }
+
+  /**
+   * Materialize this server's registered shapes into the RDF store as SHACL
+   * (core `syncShapes` → pure `sh:NodeShape` + property shapes), so a running
+   * app's app-data holds the shapes its instances validate/query against
+   * (plan-010 T1e.2). This is the canonical, uniform reuse+create mechanism:
+   * whatever shapes the app package registers (published re-exports + generated)
+   * get materialized on boot (and re-run on shape-file HMR).
+   *
+   * Gated to servers whose DEFAULT dataset is a **concrete** materializable store
+   * (detected via `rawQuery`) — i.e. an app pointing at its app-data FusekiStore.
+   * CN's default is the context-routing `AppDataRouter` (no `rawQuery`; a bare
+   * `syncShapes` orphan-read would throw with no active project), so CN is skipped
+   * here — it materializes its own pinned native shapes in its storage config.
+   */
+  private async materializeShapesIntoStore(): Promise<void> {
+    // Opt-out via `linked.config` `syncShapesOnBoot` (default true); env
+    // LINKED_SYNC_SHAPES_ON_BOOT overrides for deployment. CN sets
+    // `syncShapesOnBoot: false` in its own linked.config — its default dataset is
+    // a context-router that can't materialize context-free, and it syncs its own
+    // pinned shapes separately (linked.backend.storage.js).
+    const configFlag = (this.config as any)?.syncShapesOnBoot;
+    const envFlag = process.env.LINKED_SYNC_SHAPES_ON_BOOT;
+    if (configFlag === false || envFlag === 'false') {
+      return;
+    }
+    const appData = LinkedStorage.getDefaultDataset();
+    if (!appData) return;
+    try {
+      const {syncShapes} = await import('@_linked/core');
+      // Explicit target: materialize EVERY registered shape into the app's own
+      // data store regardless of per-shape routing/pins — syncShapes(ds) threads
+      // ds through the orphan-read + every delete→recreate. (No reliance on
+      // "whatever the default resolves to per shape".)
+      const thunks = await syncShapes(appData as any);
+      // Batched (not all-at-once) so we don't overwhelm Fuseki — the API hands
+      // back unexecuted thunks precisely so the caller paces them.
+      for (let i = 0; i < thunks.length; i += 8) {
+        await Promise.all(thunks.slice(i, i + 8).map((run) => run()));
+      }
+      console.log(
+        `[LinkedServer] materialized ${thunks.length} shape(s) into app-data`,
+      );
+    } catch (err) {
+      console.warn('[LinkedServer] shape materialization failed (non-fatal):', err);
+    }
   }
 
   // async serveData(req,res) {
@@ -223,23 +272,44 @@ export class LincdServer extends Shape {
         ).replace(/\/$/, '');
     const staticAsset = (assetPath: string) =>
       `${staticAccessURL}/public${assetPath}`;
-    //for apps with multiple bundles this should be read from the webpack build manifest
+
+    // Bundle/manifest read (plan-011: Vite is the only supported build).
+    // Vite manifest lives at public/bundles/.vite/manifest.json.
     this.assets = {
       'main.js':
-        staticAsset('/bundles/main.bundle.js') + '?v=' + this.package.version, //output js bundle from Webpack
-      'main.css': staticAsset('/bundles/main.css'), //output css from Webpack
+        staticAsset('/bundles/main.bundle.js') + '?v=' + this.package.version,
+      'main.css': staticAsset('/bundles/main.css'),
     };
     try {
-      const manifestPath = path.resolve(
+      const viteManifestPath = path.resolve(
         process.cwd(),
-        'public/bundles/manifest.json'
+        'public/bundles/.vite/manifest.json'
       );
-      if (fsNative.existsSync(manifestPath)) {
-        const manifestRaw = fsNative.readFileSync(manifestPath, 'utf-8');
-        this.assets.manifest = JSON.parse(manifestRaw);
+      if (fsNative.existsSync(viteManifestPath)) {
+        const manifestRaw = fsNative.readFileSync(viteManifestPath, 'utf-8');
+        const viteManifest = JSON.parse(manifestRaw);
+        this.assets.manifest = viteManifest;
+        // Resolve main entry per Vite manifest shape:
+        //   { "src/index.tsx": { file: "assets/main-<hash>.js", css: [...] } }
+        const mainEntry =
+          viteManifest['src/index.tsx'] ||
+          viteManifest['src/index.ts'] ||
+          Object.values(viteManifest).find((e: any) => e?.isEntry);
+        if (mainEntry?.file) {
+          this.assets['main.js'] = staticAsset(`/bundles/${mainEntry.file}`);
+        }
+        if (mainEntry?.css?.[0]) {
+          this.assets['main.css'] = staticAsset(`/bundles/${mainEntry.css[0]}`);
+        }
       }
     } catch (err) {
       console.warn('Could not load bundle manifest:', err);
+    }
+    // Vite dev marker: when Vite is in use AND no Vite manifest exists yet
+    // (= dev mode, no `vite build` run), the HTML renderer skips
+    // pre-built CSS/JS link tags. Vite handles asset injection itself.
+    if ((this.config.server as any)?.vite && !(this.assets.manifest as any)?.['src/index.tsx']) {
+      this.assets['__viteDev'] = '1';
     }
 
     const isProduction = process.env.NODE_ENV === 'production';
@@ -269,7 +339,8 @@ export class LincdServer extends Shape {
     // before controllers
     await this.initBackendProviders();
 
-    syncShapes();
+    indexShapesIntoMemory();
+    await this.materializeShapesIntoStore();
 
     //START OF EXPRESS ROUTES AND MIDDLEWARE
 
@@ -290,135 +361,21 @@ export class LincdServer extends Shape {
 
     await this.callGenericBackendProvidersMethod('setupBeforeControllers');
 
-    // if development, run webpack from the server
-    // for production you need to build the bundles before starting the server
-    const skipBuild = process.env.NO_WEBPACK === 'true';
-    if (isDevelopment && !skipBuild) {
-      //three levels up because of lib/esm (2) instead of src (1)
-      //@ts-ignore
-      // const getWebpackConfig = (await import('../../../site.webpack.config.cjs')).default;
-      // let webpackConfig = await getWebpackConfig();
-      let webpackConfig = await getWebpackAppConfig();
-
-      // const compare = (c1,c2,path?='') => {
-      //   for(let key1 of Object.keys(c1)) {
-      //     if(typeof c1[key1] === 'object') {
-      //       compare(c1[key1],c2[key1],path+='.'+key1);
-      //     } else {
-      //       if(c1[key1] !== c2[key1]) {
-      //         console.log("Difference "+path+": ");
-      //         console.log(c1[key1]);
-      //         console.log(c2[key1]);
-      //       }
-      //     }
-      //   }
-      // }
-      // compare(webpackConfig,webpackConfig2);
-
-      //default to having webpack cache on and filesystem, unless explicitly set to false
-      if (this.cacheWebpack === false) {
-        webpackConfig.cache.type = 'memory';
-      } else {
-        webpackConfig.cache.type = 'filesystem';
-      }
-      //clean dist/build folder
-      await rimraf(webpackConfig.output.path).catch((err) => {
-        if (err) {
-          console.warn(err);
-        }
-      });
-
-      const compiler = webpack(webpackConfig as any, (err, stats) => {
-        //watch build completed
-        if (err) {
-          console.error(err);
-        }
-
-        // Output stats JSON for analysis
-        if (this.analyse) {
-          fs.writeFile(
-            './data/webpack-stats.json',
-            JSON.stringify(stats.toJson({ all: true }), null, 2)
-          ).then(() => {
-            console.log('Webpack stats written to ./data/webpack-stats.json');
-          });
-        }
-      });
-
-      if (!compiler) {
-        //something went wrong with webpack config, error will be logged above
-        return;
-      }
-
-      compiler.hooks.afterEmit.tap('cleanup-the-require-cache', () => {
-        // After webpack rebuild, clear the files from the require cache,
-        // so that next server side render wil be in sync
-        // console.log(Object.keys(require.cache).filter(k => k.includes(dirName)).join("\n"));
-        // if (typeof require !== 'undefined') {
-        //   Object.keys(require.cache)
-        //     .filter((key) => key.includes(dirName))
-        //     .forEach((key) => delete require.cache[key]);
-        // }
-      });
-
-      //after the first emit (which means bundles are ready and the site is running) also rebuild the index files of the site
-      let updatedMetadata = false;
-      compiler.hooks.afterEmit.tap('update-metadata', () => {
-        if (!updatedMetadata) {
-          updatedMetadata = true;
-          //log updated paths
-          // buildMetadata()
-          //   .then((updatedPaths) => {
-          //     // if(updatedPaths && updatedPaths.length)
-          //     // {
-          //     //   console.log(chalk.blueBright('Updated metadata:\n - '+updatedPaths.join('\n - ')));
-          //     // }
-          //   })
-          //   .catch((err) => {
-          //     console.warn('Could not update metadata: ' + err);
-          //   });
-        }
-      });
-
-      this.server.use(
-        webpackDevMiddleware(compiler, {
-          serverSideRender: true,
-          publicPath: webpackConfig.output.publicPath,
-          stats: {
-            children: true,
-            version: false,
-            chunks: false,
-            assets: false,
-            entrypoints: false,
-            modules: false,
-          },
-          writeToDisk: true,
-        })
-      );
-      compiler.hooks.afterEmit.tap('store-manifest', (compilation) => {
-        try {
-          // Read manifest from the filesystem after webpack writes it
-          const manifestPath = path.resolve(
-            compilation.options.output.path,
-            'manifest.json'
-          );
-          if (fsNative.existsSync(manifestPath)) {
-            const manifestContent = fsNative.readFileSync(
-              manifestPath,
-              'utf-8'
-            );
-            this.latestManifest = JSON.parse(manifestContent);
-          }
-        } catch (err) {
-          console.warn('Failed to parse manifest from webpack emit:', err);
-        }
-      });
-      this.server.use(
-        webpackHotMiddleware(compiler, {
-          log: false,
-        })
-      );
+    // Vite middleware (plan 010): when the user app starts via Vite
+    // (`linked start --vite`), the orchestrator passes the Vite handle
+    // through config.server.viteMiddleware. We mount it and skip the
+    // entire webpack-dev-middleware setup below.
+    const viteMiddleware = (this.config.server as any)?.viteMiddleware;
+    if (viteMiddleware) {
+      this.server.use(viteMiddleware);
     }
+
+    // Plan-011: legacy webpack-dev-middleware branch removed. Under Vite
+    // (the only supported dev path now) `viteMiddleware` is set, which
+    // previously forced `skipBuild = true` and made this whole block
+    // dead. Removing it ends the static dependency on @_linked/cli/
+    // config-webpack-app (full of dynamic imports Vite couldn't analyze)
+    // and shrinks LinkedServer's import surface considerably.
 
     // //map URL routes to file paths
     const oneYear = 1000 * 60 * 60 * 24 * 365; // in milliseconds
@@ -513,6 +470,41 @@ export class LincdServer extends Shape {
     // HEAD catch-all for maintenance/health check (client fetches SITE_ROOT with method: HEAD)
     this.server.head('__health', (_req, res) => {
       res.sendStatus(200);
+    });
+
+    // CN control channel (plan-010 T1b.3). Present only when CN spawned this
+    // process with a shared secret (CN_APP_ADMIN_SECRET); a standalone app run
+    // without the secret leaves the channel closed (404). Auth is the
+    // x-cn-admin-secret header matching that env value.
+    const adminSecret = process.env.CN_APP_ADMIN_SECRET;
+    // Constant-time compare so the secret can't be recovered by timing the 401
+    // response. timingSafeEqual requires equal-length buffers, so guard length.
+    const secretMatches = (provided: string | undefined): boolean => {
+      if (!adminSecret || !provided) return false;
+      const a = Buffer.from(provided);
+      const b = Buffer.from(adminSecret);
+      return a.length === b.length && timingSafeEqual(a, b);
+    };
+    const requireAdmin = (req: express.Request, res: express.Response): boolean => {
+      if (!adminSecret) {
+        res.sendStatus(404); // no control channel in this mode
+        return false;
+      }
+      if (!secretMatches(req.get('x-cn-admin-secret'))) {
+        res.sendStatus(401);
+        return false;
+      }
+      return true;
+    };
+    this.server.get('/admin/health', (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      res.status(200).json({ status: 'ok' });
+    });
+    this.server.post('/admin/restart', (req, res) => {
+      if (!requireAdmin(req, res)) return;
+      res.sendStatus(202);
+      // CN's provisioner respawns on exit (see ChildProcessProvisioner).
+      setTimeout(() => process.exit(0), 50);
     });
 
     this.server.get(
@@ -637,11 +629,19 @@ export class LincdServer extends Shape {
         .readFile(path.join(process.cwd(), 'package.json'), 'utf-8')
         .then(async (contents) => {
           let pkg = JSON.parse(contents);
-          await this.indexPackageBackendProviders(
-            pkg.name,
-            false,
-            path.join(process.cwd(), 'src', 'backend.ts')
-          );
+          // Route through default ${pkg}/backend resolution. The app's
+          // package.json `exports`./backend field handles dev vs prod:
+          //   "exports": {
+          //     "./backend": {
+          //       "development": "./src/backend.ts",
+          //       "default": "./lib/esm/backend.js"
+          //     }
+          //   }
+          // Removed plan-010 D10: the source-direct
+          // path.join(cwd, 'src', 'backend.ts') override that forced TS
+          // runtime loading. Vite SSR's ssrLoadModule handles the
+          // transform; production runs from lib/esm/.
+          await this.indexPackageBackendProviders(pkg.name, false);
         });
     } catch (err) {
       console.warn(err);
@@ -952,7 +952,21 @@ export class LincdServer extends Shape {
       //@ts-ignore
       //   await import.meta.resolve(pkg)
       // );
-      await import(pkg);
+      // plan-011 §P6 — prefer Vite's SSR loader so workspace packages register
+      // on the SINGLE @_linked/core instance the rest of the SSR graph uses.
+      // The bare Node `import()` fallback resolves `default`→lib, evaluating a
+      // SECOND core copy (benign post-§P1, but a needless second instance).
+      // Node import stays as the fallback when Vite isn't active (production /
+      // Node-only CLI commands). Mirrors indexPackageBackendProviders.
+      const vite: any = (this.config.server as any)?.vite;
+      if (vite && typeof vite.ssrLoadModule === 'function') {
+        await vite.ssrLoadModule(pkg);
+      } else {
+        // @vite-ignore — dynamic specifier is intentional: this checks
+        // whether `pkg` is resolvable at runtime, then catches the error.
+        // eslint-disable-next-line no-unsanitized/method
+        await import(/* @vite-ignore */ pkg);
+      }
       // console.log(`✅ Successfully loaded: ${pkg}`);
     } catch (e) {
       let providerNotFound =
@@ -997,7 +1011,58 @@ export class LincdServer extends Shape {
     let backendProviderExports;
     let genericBackendProvider;
     let shapeProviders = [];
-    await import(backendIndexFilePath)
+    // Plan-010 phase 4/5: when Vite SSR is active, route module loading
+    // through vite.ssrLoadModule. This handles the case where the user app
+    // is the consuming workspace itself (self-reference like
+    // @semantu/create-now/backend), which Node's ESM resolver can't resolve
+    // from inside an installed package like @_linked/server.
+    const vite: any = (this.config.server as any)?.vite;
+    const loadModule = async (specifier: string) => {
+      if (vite && typeof vite.ssrLoadModule === 'function') {
+        // For the user app's own backend, resolve to ./src/backend.ts directly.
+        // Vite reads the app's package.json exports.development condition.
+        if (specifier === `${this.package.name}/backend`) {
+          return await vite.ssrLoadModule('/src/backend.ts');
+        }
+        // Plan-011: ssr.external is now an npm-only allowlist. Workspace
+        // packages MUST go through Vite's SSR loader so they share the
+        // same module instance as everything else in the SSR call graph
+        // (otherwise we get duplicate React contexts, duplicate Linked
+        // package registrations, etc).
+        //
+        // Pre-check whether the specifier actually resolves before
+        // calling ssrLoadModule — many packages have no `/backend`
+        // export, and ssrLoadModule logs a "Failed to load url" error
+        // INTERNALLY before throwing, which spams stdout even when the
+        // surrounding catch handles it. pluginContainer.resolveId is
+        // quiet: it returns null when no plugin can resolve the id.
+        try {
+          const resolved = await vite.pluginContainer?.resolveId?.(specifier);
+          if (!resolved) {
+            // Synthesise the same error shape the catch expects so the
+            // "no backend export, that's fine" branch fires.
+            const err: any = new Error(
+              `Failed to load url ${specifier} (resolved id: ${specifier}). Does the file exist?`,
+            );
+            throw err;
+          }
+        } catch (e: any) {
+          // If the pre-check itself errored (e.g. plugin threw on a
+          // pkg name it doesn't know), let the call below surface the
+          // real error path.
+          if (!e?.message?.includes('Failed to load url')) {
+            // fall through to ssrLoadModule which will throw + log
+          } else {
+            throw e;
+          }
+        }
+        return await vite.ssrLoadModule(specifier);
+      }
+      // No-vite path (e.g. production runtime). Fall back to Node's
+      // resolver. The dynamic specifier is intentional.
+      return await import(/* @vite-ignore */ specifier);
+    };
+    await loadModule(backendIndexFilePath)
       .then((backendProviderExports) => {
         //instantiate the exported provider classes and add them to the right place
         Object.keys(backendProviderExports).forEach((key) => {
@@ -1027,14 +1092,24 @@ export class LincdServer extends Shape {
         });
       })
       .catch((e) => {
-        const match = e.message.match(/module \'([^\']+)'/);
-        //check that the imported /backend path is not found (and only that path, not an import IN that file that is not found, that should still throw an error)
+        // Recognize "no /backend export" failures across two loader
+        // shapes:
+        //   Node's import()             → ERR_MODULE_NOT_FOUND + "Cannot find module 'X/backend'"
+        //   Vite's ssrLoadModule()      → "Failed to load url X/backend"
+        // In either case, missing /backend on a package that doesn't
+        // ship a backend is expected; loud-error only on REAL load
+        // failures (syntax error inside an existing backend.ts, etc).
+        const nodeMatch = e.message.match(/module \'([^\']+)'/);
+        const viteMatch = e.message.match(/Failed to load url ([^\s]+)/);
+        const matchedSpec = nodeMatch?.[1] ?? viteMatch?.[1];
         let providerNotFound =
-          e.code === 'ERR_MODULE_NOT_FOUND' &&
-          e.message.indexOf(`Cannot find module`) !== -1 &&
-          match &&
-          match[1] &&
-          match[1].includes('/backend');
+          !!matchedSpec &&
+          matchedSpec.includes('/backend') &&
+          (
+            (e.code === 'ERR_MODULE_NOT_FOUND' &&
+              e.message.indexOf(`Cannot find module`) !== -1) ||
+            e.message.indexOf('Failed to load url') !== -1
+          );
         if (providerNotFound) {
           // console.warn('Error loading ' + providerPath + ': ' + e.stack);
           if (warnIfNotFound) {
@@ -1058,6 +1133,87 @@ export class LincdServer extends Shape {
     this.genericProviders.set(pkg, genericBackendProvider);
     this.shapeProviders.set(pkg, shapeProviders);
     return { backendProviderExports, shapeProviders };
+  }
+
+  /**
+   * Plan-011 phase 2 — HMR re-index entry point.
+   *
+   * Called by the CLI orchestrator's Vite watcher whenever a `.ts`/`.tsx`
+   * file inside a workspace package changes. Disposes the package's
+   * existing providers (so routes, listeners, timers don't accumulate),
+   * drops them from the registry, and re-runs indexPackageBackendProviders
+   * to pick up the freshly-imported module.
+   *
+   * Dispose calls have a 5 s soft timeout. A hanging dispose logs a
+   * warning and is abandoned so HMR doesn't stall the whole dev loop.
+   */
+  async onSourceChange(pkg: string): Promise<void> {
+    const disposeWithTimeout = async (p: any, label: string) => {
+      if (!p?.dispose) return;
+      try {
+        await Promise.race([
+          Promise.resolve().then(() => p.dispose()),
+          new Promise((_, reject) =>
+            setTimeout(
+              () => reject(new Error(`dispose timeout after 5s`)),
+              5000
+            )
+          ),
+        ]);
+      } catch (err: any) {
+        console.warn(
+          chalk.yellow(`[linked] ${label} dispose failed: ${err.message}`)
+        );
+      }
+    };
+
+    const generic = this.genericProviders.get(pkg);
+    if (generic) {
+      await disposeWithTimeout(generic, `${pkg} generic provider`);
+      this.genericProviders.delete(pkg);
+    }
+
+    const shapeProvs = this.shapeProviders.get(pkg) ?? [];
+    for (const p of shapeProvs) {
+      await disposeWithTimeout(
+        p,
+        `${pkg} ${Object.getPrototypeOf(p)?.constructor?.name ?? 'shape provider'}`
+      );
+    }
+    this.shapeProviders.delete(pkg);
+
+    await this.indexPackageBackendProviders(pkg, true);
+
+    // Run the boot lifecycle on the FRESHLY-loaded provider so it
+    // re-registers its Express routes/middleware after dispose. Without
+    // this, dispose() tears the old routes off and the new instance is
+    // constructed but never gets a chance to register the replacements.
+    const fresh = this.genericProviders.get(pkg);
+    if (fresh?.setupBeforeControllers) {
+      try {
+        await fresh.setupBeforeControllers();
+      } catch (err: any) {
+        console.warn(
+          chalk.yellow(
+            `[linked] ${pkg} setupBeforeControllers after reload failed: ${err.message}`
+          )
+        );
+      }
+    }
+    const freshShapes = this.shapeProviders.get(pkg) ?? [];
+    for (const p of freshShapes) {
+      if (p?.setupBeforeControllers) {
+        try {
+          await p.setupBeforeControllers();
+        } catch (err: any) {
+          console.warn(
+            chalk.yellow(
+              `[linked] ${pkg} shape-provider setupBeforeControllers after reload failed: ${err.message}`
+            )
+          );
+        }
+      }
+    }
   }
 
   async processBackendMethodCall(request, response) {
@@ -1345,6 +1501,70 @@ export class LincdServer extends Shape {
     let App = this.config.server?.loadAppComponent
       ? await this.config.server.loadAppComponent()
       : null;
+
+    // Vite dev CSS collection (plan-010 iteration 1 — gap A):
+    // 1. Preload the matched route's module via ssrLoadModule so all
+    //    page-level dependencies (SigninLayout, CreateAccount, etc.)
+    //    enter Vite's moduleGraph BEFORE we collect CSS. Without this,
+    //    only App's eager imports are in the graph and lazy routes'
+    //    CSS would be missing — page renders unstyled until hydration.
+    // 2. Walk moduleGraph for CSS entries, load each via `?inline`
+    //    (Vite returns raw CSS string as default export).
+    // 3. Inject as inline <style> in HTML head (Html.tsx).
+    const vite: any = (this.config.server as any)?.vite;
+    // Vite SSR module preload (plan-010 iter1 gap A):
+    // Pages are loaded lazily via React.lazy — their modules only enter
+    // Vite's moduleGraph after the lazy resolves. For SSR CSS collection
+    // we need the page modules in the graph BEFORE the first render of
+    // each route. The orchestrator passes a preloadPagesFn that lists
+    // all page files (typically via `import.meta.glob`); we call
+    // ssrLoadModule on each path once. After the first render of a
+    // session everything is cached.
+    const preloadPagesFn: any = (this.config.server as any)?.viteSsrPreload;
+    if (vite?.ssrLoadModule && preloadPagesFn && !(this as any)._viteSsrPreloaded) {
+      try {
+        const pagePaths: string[] = await preloadPagesFn();
+        for (const p of pagePaths) {
+          try {
+            await vite.ssrLoadModule(p);
+          } catch {/* skip — page may not exist or have ssr errors */}
+        }
+      } catch {/* ignore */}
+      (this as any)._viteSsrPreloaded = true;
+    }
+
+    let ssrCss = '';
+    if (vite?.moduleGraph?.idToModuleMap) {
+      const cssChunks: string[] = [];
+      const seen = new Set<string>();
+      // Walk the moduleGraph for CSS modules pulled in by app/pages.
+      // Note: Tailwind v4 `@theme` directives in app theme CSS files are
+      // NOT processed at SSR collection time — the @tailwindcss/vite
+      // plugin expands them at production build only. In dev mode, the
+      // theme variables (—color-primary-*, etc.) are injected by Vite's
+      // runtime AFTER client hydration, which causes a brief flash of
+      // unthemed content (logos render black until ~hydration+200ms).
+      // Production (vite build) is unaffected — the static main.css
+      // contains expanded :root variables.
+      for (const [id] of vite.moduleGraph.idToModuleMap as Map<
+        string,
+        any
+      >) {
+        if (seen.has(id)) continue;
+        if (!/\.(module\.)?css(\?(?!.*inline)[^?]*)?$/.test(id)) continue;
+        seen.add(id);
+        try {
+          const inlineUrl = id + (id.includes('?') ? '&' : '?') + 'inline';
+          const cssModule = await vite.ssrLoadModule(inlineUrl);
+          if (typeof cssModule?.default === 'string') {
+            cssChunks.push(cssModule.default);
+          }
+        } catch {/* skip */}
+      }
+      ssrCss = cssChunks.join('\n');
+    }
+    (this.assets as any)['__viteSsrCss'] = ssrCss;
+
     await this.initRequest(req, res);
     let { requestLD, requestObject } = await this.getRequestData(req, res);
 
@@ -1370,6 +1590,13 @@ export class LincdServer extends Shape {
     let preloadScripts: string[] = [];
     let preloadStyles: string[] = [];
     let matchedRouteKey: string | null = null;
+    // Plan-010 Vite dev mode: skip preload resolution entirely. Vite
+    // handles dynamic import() at runtime — there are no pre-built
+    // chunks to preload, and the webpack-shape fallback would pick up
+    // stale bundles on disk (public/bundles/*.bundle.js from a prior
+    // webpack build) and link them, breaking hydration.
+    const usingViteDev =
+      !!(this.config.server as any)?.vite && !this.latestManifest;
 
     // Load routes config if available and extract preload chunks for the current route
     if (this.config.server?.loadRoutes) {
@@ -1395,24 +1622,58 @@ export class LincdServer extends Shape {
           }
         }
 
-        // If we found a matching route with preloadChunks, resolve them to URLs (both JS and CSS)
+        // If we found a matching route with preloadChunks, resolve them to URLs (both JS and CSS).
+        // Manifest format detection: Vite manifest entries are objects with .file/.css; webpack
+        // manifest entries are bare strings. Try Vite shape first, fall back to webpack.
+        // Skip entirely in Vite dev mode — no pre-built chunks exist; Vite handles dynamic
+        // imports at runtime.
         if (
+          !usingViteDev &&
           matchedRoute?.preloadChunks &&
           Array.isArray(matchedRoute.preloadChunks)
         ) {
+          const resolveJs = (chunkName: string): string | null => {
+            // Vite shape: keyed by source path. Look up by source-path keys
+            // that match the chunk name's tail.
+            const viteEntry =
+              manifest[`src/pages/${chunkName}.tsx`] ||
+              manifest[`src/pages/${chunkName}.ts`] ||
+              Object.values(manifest as any).find(
+                (e: any) =>
+                  e?.src?.endsWith(`${chunkName}.tsx`) ||
+                  e?.src?.endsWith(`${chunkName}.ts`),
+              );
+            if (viteEntry && typeof viteEntry === 'object' && (viteEntry as any).file) {
+              return `/bundles/${(viteEntry as any).file}`;
+            }
+            // Webpack shape: keyed by output name.
+            return (
+              manifest[`${chunkName}.js`] ||
+              manifest[`${chunkName}.bundle.js`] ||
+              manifest[`${chunkName}.mjs`] ||
+              null
+            );
+          };
+          const resolveCss = (chunkName: string): string[] => {
+            const viteEntry =
+              manifest[`src/pages/${chunkName}.tsx`] ||
+              manifest[`src/pages/${chunkName}.ts`] ||
+              Object.values(manifest as any).find(
+                (e: any) =>
+                  e?.src?.endsWith(`${chunkName}.tsx`) ||
+                  e?.src?.endsWith(`${chunkName}.ts`),
+              );
+            if (viteEntry && typeof viteEntry === 'object' && Array.isArray((viteEntry as any).css)) {
+              return (viteEntry as any).css.map((c: string) => `/bundles/${c}`);
+            }
+            const webpackCss = manifest[`${chunkName}.css`];
+            return webpackCss ? [webpackCss] : [];
+          };
           preloadScripts = matchedRoute.preloadChunks
-            .map(
-              (chunkName: string) =>
-                manifest[`${chunkName}.js`] ||
-                manifest[`${chunkName}.bundle.js`] ||
-                manifest[`${chunkName}.mjs`]
-            )
-            .filter(Boolean);
-
-          // Also collect CSS chunks for the same routes
+            .map(resolveJs)
+            .filter(Boolean) as string[];
           preloadStyles = matchedRoute.preloadChunks
-            .map((chunkName: string) => manifest[`${chunkName}.css`])
-            .filter(Boolean);
+            .flatMap(resolveCss);
         }
       } catch (err) {
         console.warn('Failed to resolve preload chunks:', err);
@@ -1439,9 +1700,30 @@ export class LincdServer extends Shape {
         </StaticRouter>
       </React.StrictMode>,
       {
-        bootstrapScripts: [
-          this.assets['main.js'], //generated webpack bundle from frontend/src
-        ],
+        // Bootstrap scripts:
+        // - Vite dev mode: use bootstrapModules so the browser loads them
+        //   as ES modules. Vite middleware intercepts /src/index.tsx and
+        //   transforms+serves it; /@vite/client provides the HMR client.
+        //   @vitejs/plugin-react requires a "preamble" inline script
+        //   defining $RefreshReg$/$RefreshSig$ — without it, the first
+        //   React module throws "can't detect preamble" and hydration
+        //   blows up. Inline via bootstrapScriptContent.
+        // - Production: bootstrapScripts with the hashed main.js from the
+        //   Vite (or legacy webpack) build manifest.
+        ...((this.config.server as any)?.vite
+          ? {
+              bootstrapScriptContent: `
+                import("/@vite/client");
+                import("/@react-refresh").then(RefreshRuntime => {
+                  RefreshRuntime.injectIntoGlobalHook(window);
+                  window.$RefreshReg$ = () => {};
+                  window.$RefreshSig$ = () => (type) => type;
+                  window.__vite_plugin_react_preamble_installed__ = true;
+                  return import("/src/index.tsx");
+                });
+              `,
+            }
+          : {bootstrapScripts: [this.assets['main.js']]}),
         onShellReady: function () {
           res.statusCode = didError ? 500 : 200;
           res.setHeader('Content-type', 'text/html');
