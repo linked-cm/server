@@ -1,5 +1,31 @@
 # @\_linked/server
 
+## 2.1.0
+
+### Minor Changes
+
+- [#13](https://github.com/linked-cm/server/pull/13) [`8932811`](https://github.com/linked-cm/server/commit/89328117fa9500897a5a57b86e07efe5860d81cd) Thanks [@flyon](https://github.com/flyon)! - **ESM-only.** Dropped the CommonJS build; the package now ships ES modules only (`type: module`, no `require` export condition, no `lib/cjs`). All first-party consumers are ESM; CJS projects on Node 22+ can still `require()` it (sync ESM) or use dynamic `import()`. Also fixed the root `types` field (was a non-existent `./index.d.ts`).
+
+### Patch Changes
+
+- [#13](https://github.com/linked-cm/server/pull/13) [`daef98d`](https://github.com/linked-cm/server/commit/daef98d777144285c2f63ed43821902371df2c66) Thanks [@flyon](https://github.com/flyon)! - `BackendAPIStore` now speaks DSL-JSON over the wire, adapting to the `@_linked/core` query-contract flip (datasets receive the live/closed query, not IR).
+
+  - The frontend store serializes each query with `query.toJSON()` before `Server.call` (the live query can't cross the wire), replacing the removed `getQueryObject()` path.
+  - `BackendAPIStoreProvider` rehydrates it with `fromJSON(json)` back into a live query before routing through `LinkedStorage` — the backend store lowers it to SPARQL itself.
+
+  No API change for callers; the round-trip is `lower(fromJSON(query.toJSON())) ≡ lower(query)`.
+
+- [#13](https://github.com/linked-cm/server/pull/13) [`28d0f49`](https://github.com/linked-cm/server/commit/28d0f497b332a663af9d40162d017a2a35cbfb31) Thanks [@flyon](https://github.com/flyon)! - Dropped `lincd-sioc: ~1.0` from `package.json` dependencies. Audit
+  confirmed no source file in `packages/server/src` imports from sioc;
+  the dep was vestigial.
+
+  No API change. Consumers that depended on `@_linked/server` transitively
+  pulling sioc into their lockfile will need to add `@_linked/sioc` (the
+  new name; see its own release notes) as a direct dep if they actually
+  use it.
+
+  Context: see create-now plan-011 report (docs/reports/009-legacy-lincd-eradication.md).
+
 ## 2.0.3
 
 ### Patch Changes
