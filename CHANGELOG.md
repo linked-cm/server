@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.1.1
+
+### Patch Changes
+
+- [#15](https://github.com/linked-cm/server/pull/15) [`e98441f`](https://github.com/linked-cm/server/commit/e98441fbef10dd3583e7fd04a3e45b5ad73e03cd) Thanks [@flyon](https://github.com/flyon)! - Replace removed `CoreMap` with native `Map` (core dropped CoreMap in `b2de3ad`). Fixes `Cannot find module @_linked/core/collections/CoreMap` from LinkedServer on a clean install.
+
 ## 2.1.0
 
 ### Minor Changes
