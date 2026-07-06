@@ -20,7 +20,6 @@ import { JSONParser } from '@_linked/server-utils/utils/JSONParser';
 import { JSONWriter } from '@_linked/server-utils/utils/JSONWriter';
 import { Server } from '@_linked/server-utils/utils/Server';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
-import { CoreMap } from '@_linked/core/collections/CoreMap';
 import { Shape } from '@_linked/core/shapes/Shape';
 import { LinkedErrorLogging } from '@_linked/core/utils/LinkedErrorLogging';
 import { LinkedFileStorage } from '@_linked/core/utils/LinkedFileStorage';
@@ -109,8 +108,8 @@ export class LinkedServer extends Shape {
   private cacheWebpack: boolean;
   private cssMode = 'scss-modules';
   private analyse: boolean = false;
-  private shapeProviders: CoreMap<string, ShapeProvider[]> = new CoreMap();
-  private genericProviders: CoreMap<string, BackendProvider> = new CoreMap();
+  private shapeProviders: Map<string, ShapeProvider[]> = new Map();
+  private genericProviders: Map<string, BackendProvider> = new Map();
   //from resizedFileName to full resized path (CDN or similar)
   private resizePathsMap: Map<string, string> = new Map();
   private api: LincdAPI;

@@ -1,5 +1,3 @@
-import { CoreMap } from '@_linked/core/collections/CoreMap';
-
 export const STORAGE_PATH: string = './data/filestores/';
 
 function hashString(str: string): string {
@@ -20,7 +18,7 @@ const newUris = new Set<string>();
  * @deprecated — URI generation for old quad stores. Will be removed.
  */
 export function setURIs(
-  nodeToCurrentUriMap: CoreMap<{ id: string }, string>,
+  nodeToCurrentUriMap: Map<{ id: string }, string>,
   prefix = process.env.DATA_ROOT
 ): Promise<[string, string][]> {
   let counter = 0;
