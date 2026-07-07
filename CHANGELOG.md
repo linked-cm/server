@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.1.2
+
+### Patch Changes
+
+- [#17](https://github.com/linked-cm/server/pull/17) [`ef9d285`](https://github.com/linked-cm/server/commit/ef9d2858fcfc766ead96c620f835dc94bf30baeb) Thanks [@flyon](https://github.com/flyon)! - Remove the `development` export condition (pointed at `src`, which isn't shipped to npm). Monorepo dev resolves workspace source via the cli Vite plugin; standalone resolves `import → lib`. No consumer-visible change.
+
 ## 2.1.1
 
 ### Patch Changes
