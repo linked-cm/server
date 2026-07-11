@@ -1363,9 +1363,9 @@ export class LinkedServer extends Shape {
         }
       }
       // Degrade gracefully rather than crashing the whole request when the shape
-      // can't be resolved (e.g. it isn't registered on this side). The framework
-      // packages are kept single-instance by `resolve.dedupe` (see cli
-      // vite-config), so a mismatch here signals a real misconfiguration.
+      // can't be resolved (e.g. it isn't registered on this side). Framework
+      // packages are kept single-instance by the cli vite-config's
+      // `optimizeDeps.exclude`, so a mismatch here signals a real misconfiguration.
       if (!shapeProvider) {
         console.warn(
           `[LinkedServer] callShapeMethod: no provider for '${shapeURI}' ` +
