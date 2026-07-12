@@ -1,5 +1,11 @@
 # @\_linked/server
 
+## 2.1.3
+
+### Patch Changes
+
+- [#20](https://github.com/linked-cm/server/pull/20) [`2bda81c`](https://github.com/linked-cm/server/commit/2bda81c6cbbbb950aa611c6366426698a5eb15b8) Thanks [@flyon](https://github.com/flyon)! - `LinkedServer.callShapeMethod` now degrades gracefully (warns and skips) when a shape URI can't be resolved to a provider, instead of throwing and turning the whole request into a 500.
+
 ## 2.1.2
 
 ### Patch Changes
