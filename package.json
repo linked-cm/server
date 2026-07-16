@@ -10,7 +10,7 @@
     "type": "git",
     "url": ""
   },
-  "version": "2.1.3",
+  "version": "2.1.4",
   "linkedPackage": true,
   "type": "module",
   "main": "lib/esm/index.js",
@@ -35,7 +35,7 @@
   "dependencies": {
     "@_linked/cli": "^1.2",
     "@_linked/core": "^2.2.1",
-    "@_linked/server-utils": "~1.0",
+    "@_linked/server-utils": "^1.0",
     "adm-zip": "^0.5.16",
     "archiver": "^7.0.1",
     "autoprefixer": "^10.4.18",
