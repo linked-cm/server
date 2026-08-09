@@ -20,6 +20,7 @@ import { JSONParser } from '@_linked/server-utils/utils/JSONParser';
 import { JSONWriter } from '@_linked/server-utils/utils/JSONWriter';
 import { Server } from '@_linked/server-utils/utils/Server';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
+import { installSpaFallback } from '../utils/spaFallback.js';
 import { Shape } from '@_linked/core/shapes/Shape';
 import { LinkedErrorLogging } from '@_linked/core/utils/LinkedErrorLogging';
 import { LinkedFileStorage } from '@_linked/core/utils/LinkedFileStorage';
@@ -506,8 +507,14 @@ export class LinkedServer extends Shape {
       setTimeout(() => process.exit(0), 50);
     });
 
-    this.server.get(
-      '*',
+    // The SPA shell is a FALLBACK, so it must always be the last layer on the
+    // router stack. `installSpaFallback` registers it and pins it there for the
+    // life of the app: anything registered afterwards (setupAfterControllers,
+    // an HMR reload re-registering a provider's routes, a consumer adding a
+    // route at runtime) automatically moves back in front of it. See
+    // ../utils/spaFallback.ts.
+    installSpaFallback(
+      this.server,
       this.handleErrors(async (req, res) => {
         //make sure the frontend bundle has finished building
         // await this.waitForWebpack();
@@ -1213,6 +1220,12 @@ export class LinkedServer extends Shape {
         }
       }
     }
+
+    // NOTE: the routes re-registered above land BEHIND the SPA catch-all
+    // (`disposeRoutes()` splices a provider's layers out of the router stack;
+    // `registerRoute()` can only append them back). Nothing to do here — the
+    // fallback re-pins itself to the tail on the next request. See
+    // ../utils/spaFallback.ts.
   }
 
   async processBackendMethodCall(request, response) {
