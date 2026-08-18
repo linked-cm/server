@@ -231,7 +231,19 @@ export class LinkedServer extends Shape {
       // data store regardless of per-shape routing/pins — syncShapes(ds) threads
       // ds through the orphan-read + every delete→recreate. (No reliance on
       // "whatever the default resolves to per shape".)
-      const thunks = await syncShapes(appData as any);
+      //
+      // `orphanScope: 'ownedNamespaces'` — the app's app-data is a MULTI-WRITER
+      // dataset (arch-04: one app-data dataset, several writers): CN also
+      // materializes capability shapes (e.g. the documents capability's
+      // `sh:NodeShape`s, via ProjectProvider.enableCapability → syncShape) into
+      // the SAME dataset, in package namespaces this app never registers. The
+      // default full orphan sweep ('all') would delete every store shape not in
+      // this app's code — clobbering those capability shapes on every boot. Scoping
+      // the sweep to the namespaces the app itself writes prunes the app's own
+      // renamed/removed shapes while leaving other writers' shapes intact.
+      const thunks = await syncShapes(appData as any, {
+        orphanScope: 'ownedNamespaces',
+      });
       // Batched (not all-at-once) so we don't overwhelm Fuseki — the API hands
       // back unexecuted thunks precisely so the caller paces them.
       for (let i = 0; i < thunks.length; i += 8) {
@@ -645,7 +657,9 @@ export class LinkedServer extends Shape {
     } catch (err) {
       console.warn(err);
     }
+
   }
+
 
   /**
    * Filters local workspace packages to only those reachable from the app's
