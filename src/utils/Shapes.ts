@@ -6,7 +6,8 @@
  * which populates the shared in-memory index at startup. (Distinct from core's
  * `syncShapes`, which materializes shapes into the RDF store as SHACL.)
  */
-import { NodeShape, getNodeShapeUri } from '@_linked/core/shapes/SHACL';
+import { getNodeShapeUri } from '@_linked/core/shapes/SHACL';
+import type { NodeShapeData } from '@_linked/core/shapes/nodeShapeData';
 import { getAllShapeClasses } from '@_linked/core/utils/ShapeClass';
 import type { PathExpr } from '@_linked/core/paths/PropertyPathExpr';
 import type { ShapeDetails } from '@_linked/server-utils/types/ShapeDetails';
@@ -38,7 +39,7 @@ export async function indexShapesIntoMemory() {
   const allShapeClasses = getAllShapeClasses();
 
   for (let [_uri, shapeClass] of allShapeClasses) {
-    const localShape = (shapeClass as any).shape as NodeShape;
+    const localShape = (shapeClass as any).shape as NodeShapeData;
     if (!localShape) continue;
     shapeIndex[localShape.id] = {
       id: localShape.id,

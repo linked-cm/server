@@ -122,14 +122,17 @@ export class LinkedServer extends Shape {
    * yarn linked start sends the contents of linked.config.js as an object to this constructor
    * @param n
    */
-  constructor(config?: LinkedConfig | string | { id: string }) {
+  constructor(config?: LinkedConfig | string | { id?: string }) {
     super(
       typeof config === 'string' || (config && 'id' in config)
         ? config
         : undefined
     );
     if (config && typeof config !== 'string' && !('id' in config)) {
-      this.config = config;
+      // The absence of `id` is the runtime discriminator for a LinkedConfig;
+      // the widened `{id?: string}` member of the union keeps TS from narrowing
+      // to it on that check alone.
+      this.config = config as LinkedConfig;
     }
 
     this.api = new LincdAPI({ id: process.env.SITE_ROOT + '/api' });
