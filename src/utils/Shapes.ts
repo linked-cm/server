@@ -48,7 +48,17 @@ export async function indexShapesIntoMemory() {
       targetClass: localShape.targetClass
         ? { id: localShape.targetClass.id }
         : undefined,
-      properties: localShape.properties.map((p) => ({
+      // Two core generations are in play. Older core (the range this package
+      // declares) exposes a `NodeShape.properties` getter over a private
+      // `propertyShapes`; newer core stores metadata as a plain object with a
+      // public `propertyShapes` and dropped the getter. Reading only
+      // `.properties` therefore yielded undefined against newer core and threw
+      // on `.map`, aborting the loop before the first shape was indexed and
+      // leaving the whole index empty. Accept either shape.
+      properties: ((localShape as any).properties ??
+        (localShape as any).propertyShapes ??
+        []
+      ).map((p) => ({
         id: p.id,
         label: p.label,
         path: pathToIndexValue(p.path),
