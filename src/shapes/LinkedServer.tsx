@@ -129,7 +129,10 @@ export class LinkedServer extends Shape {
         : undefined
     );
     if (config && typeof config !== 'string' && !('id' in config)) {
-      this.config = config;
+      // The absence of `id` is the runtime discriminator for a LinkedConfig;
+      // the widened `{id?: string}` member of the union keeps TS from narrowing
+      // to it on that check alone.
+      this.config = config as LinkedConfig;
     }
 
     this.api = new LincdAPI({ id: process.env.SITE_ROOT + '/api' });
