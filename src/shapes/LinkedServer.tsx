@@ -41,6 +41,10 @@ import { CookieJar } from 'tough-cookie';
 import { lincdServer } from '../ontologies/lincd-server.js';
 import { linkedShape } from '../package.js';
 import { indexShapesIntoMemory } from '../utils/Shapes.js';
+import {
+  installSpaFallback,
+  repinSpaFallback,
+} from '../utils/spaFallback.js';
 import { LincdAPI } from './LincdAPI.js';
 import type { RoutesConfig, RouteConfig } from '../types/RouteConfig.js';
 
@@ -506,17 +510,14 @@ export class LinkedServer extends Shape {
       setTimeout(() => process.exit(0), 50);
     });
 
-    this.server.get(
-      '*',
-      this.handleErrors(async (req, res) => {
-        //make sure the frontend bundle has finished building
-        // await this.waitForWebpack();
-        this.render(req, res);
-      })
-    );
-
     // after controller
     await this.callGenericBackendProvidersMethod('setupAfterControllers');
+
+    // The SPA catch-all goes on LAST. `setupAfterControllers` is a documented
+    // hook for providers to register their own routes, so installing the
+    // catch-all before it would shadow every GET route registered there —
+    // answering them with the client shell at status 200.
+    this.installSpaFallback();
 
     //remove http(s):// and remove port :[port]
     const HOST = process.env.SITE_ROOT.replace(/https?:\/\//, '').replace(
@@ -1146,6 +1147,22 @@ export class LinkedServer extends Shape {
    * Dispose calls have a 5 s soft timeout. A hanging dispose logs a
    * warning and is abandoned so HMR doesn't stall the whole dev loop.
    */
+  /**
+   * Install the client-shell catch-all as the last ordinary layer on the
+   * router stack. See utils/spaFallback.ts for why ordering has to be
+   * re-asserted rather than assumed.
+   */
+  private installSpaFallback(): void {
+    installSpaFallback(
+      this.server,
+      this.handleErrors(async (req, res) => {
+        //make sure the frontend bundle has finished building
+        // await this.waitForWebpack();
+        this.render(req, res);
+      })
+    );
+  }
+
   async onSourceChange(pkg: string): Promise<void> {
     const disposeWithTimeout = async (p: any, label: string) => {
       if (!p?.dispose) return;
@@ -1213,6 +1230,12 @@ export class LinkedServer extends Shape {
         }
       }
     }
+
+    // Providers just re-registered their routes, which express can only APPEND
+    // — i.e. behind the catch-all installed at boot. Put it back at the end so
+    // those routes stay reachable. Safe here: every registration above has
+    // completed, so no provider is mid-capture of its own layer indices.
+    repinSpaFallback(this.server);
   }
 
   async processBackendMethodCall(request, response) {
