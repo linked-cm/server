@@ -10,7 +10,7 @@
     "type": "git",
     "url": ""
   },
-  "version": "2.1.4",
+  "version": "2.1.5",
   "linkedPackage": true,
   "type": "module",
   "main": "lib/esm/index.js",
