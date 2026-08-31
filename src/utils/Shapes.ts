@@ -6,7 +6,8 @@
  * which populates the shared in-memory index at startup. (Distinct from core's
  * `syncShapes`, which materializes shapes into the RDF store as SHACL.)
  */
-import { NodeShape, getNodeShapeUri } from '@_linked/core/shapes/SHACL';
+import { getNodeShapeUri } from '@_linked/core/shapes/SHACL';
+import type { NodeShapeData } from '@_linked/core/shapes/nodeShapeData';
 import { getAllShapeClasses } from '@_linked/core/utils/ShapeClass';
 import type { PathExpr } from '@_linked/core/paths/PropertyPathExpr';
 import type { ShapeDetails } from '@_linked/server-utils/types/ShapeDetails';
@@ -38,7 +39,7 @@ export async function indexShapesIntoMemory() {
   const allShapeClasses = getAllShapeClasses();
 
   for (let [_uri, shapeClass] of allShapeClasses) {
-    const localShape = (shapeClass as any).shape as NodeShape;
+    const localShape = (shapeClass as any).shape as NodeShapeData;
     if (!localShape) continue;
     shapeIndex[localShape.id] = {
       id: localShape.id,
@@ -48,7 +49,12 @@ export async function indexShapesIntoMemory() {
       targetClass: localShape.targetClass
         ? { id: localShape.targetClass.id }
         : undefined,
-      properties: localShape.properties.map((p) => ({
+      // core stores shape metadata as a plain NodeShapeData object, whose
+      // property list is `propertyShapes`. The old `NodeShape.properties`
+      // getter was removed with that conversion, so reading `.properties` here
+      // yielded undefined and threw on `.map` — aborting the loop before the
+      // first shape was indexed and leaving the whole index empty.
+      properties: (localShape.propertyShapes ?? []).map((p) => ({
         id: p.id,
         label: p.label,
         path: pathToIndexValue(p.path),

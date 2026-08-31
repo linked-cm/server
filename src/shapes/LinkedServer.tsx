@@ -193,7 +193,7 @@ export class LinkedServer extends Shape {
 
     await this.initBackendProviders();
 
-    indexShapesIntoMemory();
+    await indexShapesIntoMemory();
     await this.materializeShapesIntoStore();
     return this;
   }
@@ -338,7 +338,7 @@ export class LinkedServer extends Shape {
     // before controllers
     await this.initBackendProviders();
 
-    indexShapesIntoMemory();
+    await indexShapesIntoMemory();
     await this.materializeShapesIntoStore();
 
     //START OF EXPRESS ROUTES AND MIDDLEWARE
