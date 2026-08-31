@@ -1586,6 +1586,7 @@ export class LinkedServer extends Shape {
     // Abandon and switch to client rendering if enough time passes.
     // Try lowering this to see the client recover.
     let stream;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
     let timedout = false;
     // const timeout = setTimeout(() => {
     //   stream.abort(`${req.url}: ⏱ SSR stream took too long — force abort`);
@@ -1776,13 +1777,27 @@ export class LinkedServer extends Shape {
         onShellError(x) {
           didError = true;
           console.error(x);
+          // Respond NOW. Without this the socket stays open until the 10s
+          // watchdog below fires, turning every render-time crash into an
+          // opaque "SSR timed out" with the real error buried in the log.
+          clearTimeout(timeout);
+          if (res.headersSent) {
+            res.end();
+            return;
+          }
+          res.statusCode = 500;
+          res.setHeader('Content-type', 'text/plain');
+          res.end(
+            'SSR render failed before the shell was ready:\n\n' +
+              ((x as any)?.stack ?? (x as any)?.message ?? String(x))
+          );
         },
       }
     );
 
     // Abandon and switch to client rendering if enough time passes.
     // Try lowering this to see the client recover.
-    const timeout = setTimeout(() => {
+    timeout = setTimeout(() => {
       stream.abort('⏱ SSR stream took too long — force abort');
       if (!res.headersSent) {
         res.statusCode = 500;
