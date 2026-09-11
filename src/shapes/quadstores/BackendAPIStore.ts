@@ -4,6 +4,7 @@ import { Shape } from '@_linked/core/shapes/Shape';
 import { Server } from '@_linked/server-utils/utils/Server';
 import type { IDataset } from '@_linked/core/interfaces/IDataset';
 import type { SelectQuery } from '@_linked/core/queries/SelectQuery';
+import type { AskQuery } from '@_linked/core/queries/AskQuery';
 import type { UpdateQuery } from '@_linked/core/queries/UpdateQuery';
 import type { CreateQuery } from '@_linked/core/queries/CreateQuery';
 import type {
@@ -67,6 +68,12 @@ export class BackendAPIStore extends Shape implements IDataset {
   // the BackendAPIStoreProvider rehydrates with `fromJSON()` on the backend.
   selectQuery(query: SelectQuery): Promise<SelectResult> {
     return Server.call(this, 'selectQuery', query.toJSON()) as Promise<SelectResult>;
+  }
+
+  // Required by IDataset: existence checks such as .exists() use ASK rather
+  // than SELECT. Forward the serialized query to the backend for a boolean result.
+  askQuery(query: AskQuery): Promise<boolean> {
+    return Server.call(this, 'askQuery', query.toJSON()) as Promise<boolean>;
   }
 
   updateQuery(query: UpdateQuery): Promise<UpdateResult> {

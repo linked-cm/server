@@ -19,6 +19,12 @@ export class BackendAPIStoreProvider extends ShapeProvider {
     return LinkedStorage.selectQuery(fromJSON(json) as any);
   }
 
+  // Reconstruct the browser's ASK query and route it to the configured dataset
+  // through LinkedStorage, returning its boolean result to the frontend store.
+  askQuery(store: BackendAPIStore, json: any) {
+    return LinkedStorage.askQuery(fromJSON(json) as any);
+  }
+
   updateQuery(store: BackendAPIStore, json: any) {
     return LinkedStorage.updateQuery(fromJSON(json) as any);
   }
