@@ -520,7 +520,11 @@ export class LinkedServer extends Shape {
     // hook for providers to register their own routes, so installing the
     // catch-all before it would shadow every GET route registered there —
     // answering them with the client shell at status 200.
-    this.installSpaFallback();
+    // An API-only backend (`linked start --api-only`) has no app to render:
+    // without the catch-all, page requests get express's plain 404.
+    if (!(this.config.server as any)?.apiOnly) {
+      this.installSpaFallback();
+    }
 
     //remove http(s):// and remove port :[port]
     const HOST = process.env.SITE_ROOT.replace(/https?:\/\//, '').replace(
