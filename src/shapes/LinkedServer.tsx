@@ -1376,6 +1376,7 @@ export class LinkedServer extends Shape {
       });
     };
 
+    let providerMethodFailed = false;
     try {
       //- find matching provider
       let shapeClass = getShapeClass(shapeURI);
@@ -1447,6 +1448,11 @@ export class LinkedServer extends Shape {
                 }.${method}(): `,
                 e
               );
+              // Rethrow so the HTTP route answers with an error status (via
+              // handleErrorsJson) instead of `200 null`, and direct backend
+              // callers get a rejected promise.
+              providerMethodFailed = true;
+              throw e;
             }
           } else {
             console.warn(
@@ -1472,7 +1478,10 @@ export class LinkedServer extends Shape {
         );
       }
     } catch (err) {
-      console.warn(`Error whilst trying to access provider of ${pkg}: `, err);
+      if (!providerMethodFailed) {
+        console.warn(`Error whilst trying to access provider of ${pkg}: `, err);
+      }
+      throw err;
     }
     return null;
   }
@@ -1984,6 +1993,8 @@ export class LinkedServer extends Shape {
 
       // error logging
       LinkedErrorLogging.log(e);
+      // Rethrow so the HTTP route answers with an error status instead of `200 null`.
+      throw e;
     }
     return result;
   }
