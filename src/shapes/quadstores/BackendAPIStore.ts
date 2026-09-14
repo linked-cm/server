@@ -87,18 +87,12 @@ export class BackendAPIStore extends Shape implements IDataset {
   }
 
   /**
-   * Every query method returns a value on success (the server sends JSON, `null`
-   * at the least). `Server.call` resolves `undefined` when the HTTP call failed
-   * (non-2xx status; it only logs a warning), so turn that into a rejection
-   * instead of letting a failed query read as an empty result.
+   * Opts in to `rejectOnError`, so a failed call (HTTP error status, or no
+   * provider on the backend) rejects with a `ServerCallError` carrying the
+   * status and the server's message instead of reading as an empty result.
+   * Whatever a successful call returns, `undefined` included, resolves as is.
    */
-  private async callBackend<T>(method: string, json: unknown): Promise<T> {
-    const result = await Server.call(this, method, json);
-    if (result === undefined) {
-      throw new Error(
-        `BackendAPIStore.${method} failed: the backend call returned no response`
-      );
-    }
-    return result as T;
+  private callBackend<T>(method: string, json: unknown): Promise<T> {
+    return Server.call(this, { method, rejectOnError: true }, json);
   }
 }
