@@ -412,9 +412,10 @@ export class LinkedServer extends Shape {
     this.server.use('/.well-known', express.static('./public/.well-known'));
 
     // this.server.post('/data',this.handleErrorsJson(async (req,res) => this.serveData(req, res)));
-    this.server.get('/resized/*', async (req, res) => {
-      this.resizeImage(req, res);
-    });
+    this.server.get(
+      '/resized/*',
+      this.handleErrorsJson(async (req, res) => this.resizeImage(req, res))
+    );
 
     // Scoped-package variants (@scope/pkg). Register BEFORE the unscoped
     // routes — Express `:pkg` won't consume slashes, so a call to
@@ -725,6 +726,9 @@ export class LinkedServer extends Shape {
       // example: /uploads/resized/935b511c9_cropped.jpeg
       const url = new URL(imageFileName);
       const { name, ext } = path.parse(url.pathname);
+      // Sharp can read SVG files, but it cannot write SVG output. Rasterize SVG
+      // sources to PNG and use the matching extension for the cached file.
+      const outputExtension = ext.toLowerCase() === '.svg' ? '.png' : ext;
 
       // append the width and height parameters to the base name
       // example: 935b511c9_cropped_w190.jpeg or 935b511c9_cropped_w190h190.jpeg
@@ -737,7 +741,7 @@ export class LinkedServer extends Shape {
       const newPathname = path.join(
         path.dirname(url.pathname),
         'resized',
-        `${newName}${ext}`
+        `${newName}${outputExtension}`
       );
 
       // remove the leading slash from the pathname
@@ -778,7 +782,14 @@ export class LinkedServer extends Shape {
         // get the image from imageFileName
         const image = await globalThis
           .fetch(imageFileName)
-          .then((res) => res.arrayBuffer())
+          .then((response) => {
+            if (!response.ok) {
+              throw new Error(
+                `Image request failed with ${response.status} ${response.statusText}`
+              );
+            }
+            return response.arrayBuffer();
+          })
           .then((arrayBuffer) => Buffer.from(arrayBuffer))
           .catch((err) => {
             console.warn('Could not fetch image from URL: ' + err);
@@ -786,7 +797,7 @@ export class LinkedServer extends Shape {
           });
 
         // if image is null, return 404
-        if (!image) {
+        if (!image?.length) {
           res.status(404).send({ error: 'Could not fetch image from URL' });
           return;
         }
@@ -803,9 +814,12 @@ export class LinkedServer extends Shape {
           return;
         }
 
+        // Sharp supports SVG as an input format, but not as an output format.
+        const outputFormat = format === 'svg' ? 'png' : format;
+
         // set the output options based on the format for quality and compression
         let outputOptions;
-        switch (format) {
+        switch (outputFormat) {
           case 'jpeg':
             outputOptions = { quality: 90 };
             break;
@@ -826,7 +840,7 @@ export class LinkedServer extends Shape {
             width ? parseInt(width) : null,
             height ? parseInt(height) : null
           )
-          .toFormat(format, outputOptions)
+          .toFormat(outputFormat, outputOptions)
           .toBuffer()
           .catch((err) => {
             console.warn('Could not resize image: ' + err);
@@ -858,6 +872,8 @@ export class LinkedServer extends Shape {
     //if this request has not been made (and stored on the HD) before
     let [trueFileName, ...extensions] = imageFileName.split('.');
     let extension = extensions.join('.');
+    const outputExtension =
+      extension.toLowerCase() === 'svg' ? 'png' : extension;
 
     let resizedImageFileName =
       trueFileName +
@@ -865,7 +881,7 @@ export class LinkedServer extends Shape {
       (width ? 'w' + width : '') +
       (height ? 'h' + height : '') +
       '.' +
-      extension;
+      outputExtension;
 
     let resizedFilePath = path.join(
       process.cwd(),
@@ -900,21 +916,12 @@ export class LinkedServer extends Shape {
           width ? parseInt(width) : null,
           height ? parseInt(height) : null
         );
+        if (extension.toLowerCase() === 'svg') {
+          image.png({ compressionLevel: 9 });
+        }
 
         //write image to disk
-        await image
-          .toFile(resizedFilePath)
-          .then(() => {
-            // console.log('resized image written to disk: ' + resizedFilePath);
-          })
-          .catch((err) => {
-            console.warn(
-              'Could not write resized image to disk at ' +
-                resizedFilePath +
-                ': ' +
-                err
-            );
-          });
+        await image.toFile(resizedFilePath);
         //
         // //get content type from the file extension
         // let contentType;
@@ -937,7 +944,7 @@ export class LinkedServer extends Shape {
         // image.pipe(res);
       } catch (err) {
         console.warn(err);
-        res.status(500).send({ error: 'Could not resize image' });
+        return res.status(500).send({ error: 'Could not resize image' });
       }
     }
     //send the resized image
