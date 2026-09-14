@@ -88,7 +88,8 @@ export class LincdAPI extends Shape {
             `SELECT (COUNT(?s) AS ?count) ?type WHERE { ?s a ?type } GROUP BY ?type`
           )
           .then((results) => {
-            if (!results) return;
+            // rawQuery also types ASK results (a boolean envelope); this is a SELECT.
+            if (!results || !('results' in results)) return;
             results.results.bindings.forEach((binding) => {
               if (binding.type && binding.type.value) {
                 typesWithInstances.set(

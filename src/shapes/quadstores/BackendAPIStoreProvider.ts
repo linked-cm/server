@@ -19,6 +19,10 @@ export class BackendAPIStoreProvider extends ShapeProvider {
     return LinkedStorage.selectQuery(fromJSON(json) as any);
   }
 
+  askQuery(store: BackendAPIStore, json: any) {
+    return LinkedStorage.askQuery(fromJSON(json) as any);
+  }
+
   updateQuery(store: BackendAPIStore, json: any) {
     return LinkedStorage.updateQuery(fromJSON(json) as any);
   }

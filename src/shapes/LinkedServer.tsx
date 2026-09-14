@@ -520,7 +520,11 @@ export class LinkedServer extends Shape {
     // hook for providers to register their own routes, so installing the
     // catch-all before it would shadow every GET route registered there —
     // answering them with the client shell at status 200.
-    this.installSpaFallback();
+    // An API-only backend (`linked start --api-only`) has no app to render:
+    // without the catch-all, page requests get express's plain 404.
+    if (!(this.config.server as any)?.apiOnly) {
+      this.installSpaFallback();
+    }
 
     //remove http(s):// and remove port :[port]
     const HOST = process.env.SITE_ROOT.replace(/https?:\/\//, '').replace(
@@ -1099,20 +1103,24 @@ export class LinkedServer extends Shape {
         // shapes:
         //   Node's import()             → ERR_MODULE_NOT_FOUND + "Cannot find module 'X/backend'"
         //   Vite's ssrLoadModule()      → "Failed to load url X/backend"
+        //   package `exports` without a ./backend entry (Node + Vite)
+        //                               → 'Missing "./backend" specifier in "X" package'
         // In either case, missing /backend on a package that doesn't
         // ship a backend is expected; loud-error only on REAL load
         // failures (syntax error inside an existing backend.ts, etc).
         const nodeMatch = e.message.match(/module \'([^\']+)'/);
         const viteMatch = e.message.match(/Failed to load url ([^\s]+)/);
         const matchedSpec = nodeMatch?.[1] ?? viteMatch?.[1];
+        const notExported = /Missing "\.\/backend" specifier in "[^"]+" package/.test(
+          e.message
+        );
         let providerNotFound =
-          !!matchedSpec &&
-          matchedSpec.includes('/backend') &&
-          (
-            (e.code === 'ERR_MODULE_NOT_FOUND' &&
+          notExported ||
+          (!!matchedSpec &&
+            matchedSpec.includes('/backend') &&
+            ((e.code === 'ERR_MODULE_NOT_FOUND' &&
               e.message.indexOf(`Cannot find module`) !== -1) ||
-            e.message.indexOf('Failed to load url') !== -1
-          );
+              e.message.indexOf('Failed to load url') !== -1));
         if (providerNotFound) {
           // console.warn('Error loading ' + providerPath + ': ' + e.stack);
           if (warnIfNotFound) {
@@ -1368,6 +1376,7 @@ export class LinkedServer extends Shape {
       });
     };
 
+    let providerMethodFailed = false;
     try {
       //- find matching provider
       let shapeClass = getShapeClass(shapeURI);
@@ -1439,6 +1448,11 @@ export class LinkedServer extends Shape {
                 }.${method}(): `,
                 e
               );
+              // Rethrow so the HTTP route answers with an error status (via
+              // handleErrorsJson) instead of `200 null`, and direct backend
+              // callers get a rejected promise.
+              providerMethodFailed = true;
+              throw e;
             }
           } else {
             console.warn(
@@ -1464,7 +1478,10 @@ export class LinkedServer extends Shape {
         );
       }
     } catch (err) {
-      console.warn(`Error whilst trying to access provider of ${pkg}: `, err);
+      if (!providerMethodFailed) {
+        console.warn(`Error whilst trying to access provider of ${pkg}: `, err);
+      }
+      throw err;
     }
     return null;
   }
@@ -1976,6 +1993,8 @@ export class LinkedServer extends Shape {
 
       // error logging
       LinkedErrorLogging.log(e);
+      // Rethrow so the HTTP route answers with an error status instead of `200 null`.
+      throw e;
     }
     return result;
   }

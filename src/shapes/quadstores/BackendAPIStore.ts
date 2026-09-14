@@ -4,6 +4,7 @@ import { Shape } from '@_linked/core/shapes/Shape';
 import { Server } from '@_linked/server-utils/utils/Server';
 import type { IDataset } from '@_linked/core/interfaces/IDataset';
 import type { SelectQuery } from '@_linked/core/queries/SelectQuery';
+import type { AskQuery } from '@_linked/core/queries/AskQuery';
 import type { UpdateQuery } from '@_linked/core/queries/UpdateQuery';
 import type { CreateQuery } from '@_linked/core/queries/CreateQuery';
 import type {
@@ -66,18 +67,38 @@ export class BackendAPIStore extends Shape implements IDataset {
   // live (closed) query can't cross Server.call as-is, so we ship `toJSON()` and
   // the BackendAPIStoreProvider rehydrates with `fromJSON()` on the backend.
   selectQuery(query: SelectQuery): Promise<SelectResult> {
-    return Server.call(this, 'selectQuery', query.toJSON()) as Promise<SelectResult>;
+    return this.callBackend('selectQuery', query.toJSON());
+  }
+
+  askQuery(query: AskQuery): Promise<boolean> {
+    return this.callBackend('askQuery', query.toJSON());
   }
 
   updateQuery(query: UpdateQuery): Promise<UpdateResult> {
-    return Server.call(this, 'updateQuery', query.toJSON()) as Promise<UpdateResult>;
+    return this.callBackend('updateQuery', query.toJSON());
   }
 
   createQuery(query: CreateQuery): Promise<CreateResult> {
-    return Server.call(this, 'createQuery', query.toJSON()) as Promise<CreateResult>;
+    return this.callBackend('createQuery', query.toJSON());
   }
 
   deleteQuery(query: DeleteQuery): Promise<DeleteResponse> {
-    return Server.call(this, 'deleteQuery', query.toJSON()) as Promise<DeleteResponse>;
+    return this.callBackend('deleteQuery', query.toJSON());
+  }
+
+  /**
+   * Every query method returns a value on success (the server sends JSON, `null`
+   * at the least). `Server.call` resolves `undefined` when the HTTP call failed
+   * (non-2xx status; it only logs a warning), so turn that into a rejection
+   * instead of letting a failed query read as an empty result.
+   */
+  private async callBackend<T>(method: string, json: unknown): Promise<T> {
+    const result = await Server.call(this, method, json);
+    if (result === undefined) {
+      throw new Error(
+        `BackendAPIStore.${method} failed: the backend call returned no response`
+      );
+    }
+    return result as T;
   }
 }
