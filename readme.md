@@ -17,6 +17,8 @@ If you want to further adjust the functionality of LincdServer yourself, either 
   - [Shape providers](#shape-providers)
   - [Generic backend providers](#generic-backend-providers)
   - [Gotchas](#gotchas)
+  - [Error semantics](#error-semantics)
+- [API-only servers (`server.apiOnly`)](#api-only-servers-serverapionly)
 - [Provider lifecycle and HMR](#provider-lifecycle-and-hmr)
   - [When to implement `dispose()`](#when-to-implement-dispose)
   - [Route tracking helpers](#route-tracking-helpers)
@@ -175,6 +177,44 @@ then make sure that the `packageName` you pass to `Server.call(packageName)` is 
 where the provider lives. Generally, this means you call `Server.call` from a component in the same package as the
 Provider (and import packageName from `src/package.ts`). If you want to call a method from another package, then import
 packageName from that package, or manually type it.
+
+### Error semantics
+
+The `/call/...` routes answer as follows:
+
+| Situation | Response |
+| --- | --- |
+| The provider method returns a value | `200` with the JSON result (`null` when the method returns nothing and has not written the response itself) |
+| The provider method throws | `500 {"error": "internal server error..."}`. The stack is included in development only. |
+| No provider handles the call (no provider for the package or shape, or the provider has no such method) | `501 {"error": "No provider for <pkg>/<method>"}` |
+
+What the caller sees depends on how it calls:
+
+- **`Server.call` from the frontend (over HTTP).** By default a non-2xx response logs a warning and resolves `undefined`. Pass `{ method, rejectOnError: true }` as the method to reject with a `ServerCallError` instead. The error carries `status` and the server's `error` message.
+
+  ```typescript
+  Server.call(this, { method: 'sendEmail', rejectOnError: true }, subject, message);
+  ```
+
+- **`Server.call` on the backend.** Here it calls the `LinkedServer` directly.
+  - A provider method that throws always rejects.
+  - An unmatched call resolves `undefined` by default and rejects with a 501 `ServerCallError` when `rejectOnError` is set.
+- **`BackendAPIStore`.** It always uses `rejectOnError`, so a failed query rejects with the status and message. A successful call resolves with whatever the provider returned, `undefined` included.
+
+## API-only servers (`server.apiOnly`)
+
+A backend that serves no frontend app (e.g. started with `linked start --api-only`) can set `apiOnly` in its server config:
+
+```typescript
+new LinkedServer({
+  server: {
+    apiOnly: true,
+    //...
+  },
+});
+```
+
+With `apiOnly` the server skips page rendering. It installs no SPA catch-all, so a `GET` for a page that no route handles gets express's plain `404` instead of the app shell. The `/call/...` and `/api/...` routes and the routes that providers register work as usual.
 
 ## Provider lifecycle and HMR
 

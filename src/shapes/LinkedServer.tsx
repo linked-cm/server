@@ -19,6 +19,7 @@ import { BackendProvider } from '@_linked/server-utils/utils/BackendProvider';
 import { JSONParser } from '@_linked/server-utils/utils/JSONParser';
 import { JSONWriter } from '@_linked/server-utils/utils/JSONWriter';
 import { Server } from '@_linked/server-utils/utils/Server';
+import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
 import { Shape } from '@_linked/core/shapes/Shape';
 import { LinkedErrorLogging } from '@_linked/core/utils/LinkedErrorLogging';
@@ -1397,16 +1398,17 @@ export class LinkedServer extends Shape {
           }
         }
       }
-      // Degrade gracefully rather than crashing the whole request when the shape
-      // can't be resolved (e.g. it isn't registered on this side). Framework
-      // packages are kept single-instance by the cli vite-config's
-      // `optimizeDeps.exclude`, so a mismatch here signals a real misconfiguration.
+      // No provider for this shape (e.g. it isn't registered on this side).
+      // Framework packages are kept single-instance by the cli vite-config's
+      // `optimizeDeps.exclude`, so a mismatch here signals a real
+      // misconfiguration. Answer 501 (via handleErrorsJson) rather than an empty
+      // 200; direct backend callers get a rejected ServerCallError.
       if (!shapeProvider) {
         console.warn(
           `[LinkedServer] callShapeMethod: no provider for '${shapeURI}' ` +
-            `(pkg '${pkg}', method '${method}') — skipping.`
+            `(pkg '${pkg}', method '${method}').`
         );
-        return;
+        throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
       }
 
       if (shapeProvider) {
@@ -1462,23 +1464,16 @@ export class LinkedServer extends Shape {
             );
           }
         } else {
-          return this.sendError(
-            response,
-            501,
+          console.warn(
             `${
               Object.getPrototypeOf(shapeProvider).constructor.name
             } does not have a method called ${method}`
           );
+          throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
         }
-      } else {
-        return this.sendError(
-          response,
-          501,
-          "Could not find provider for shape '" + shapeURI + "'"
-        );
       }
     } catch (err) {
-      if (!providerMethodFailed) {
+      if (!providerMethodFailed && !ServerCallError.is(err)) {
         console.warn(`Error whilst trying to access provider of ${pkg}: `, err);
       }
       throw err;
@@ -1502,6 +1497,11 @@ export class LinkedServer extends Shape {
       try {
         return await fn(req, res);
       } catch (err) {
+        // A ServerCallError (e.g. 501 for a call no provider handles) carries
+        // its own status and a message that is safe to send to the client.
+        if (ServerCallError.is(err)) {
+          return this.sendError(res, err.status, err.message);
+        }
         this.sendError(
           res,
           500,
@@ -1952,7 +1952,7 @@ export class LinkedServer extends Shape {
           pkg
         )} does not have a generic backend provider. If you can edit this package, make sure 'backend.ts' is included in 'tsconfig.json' and that it exports a provider.`
       );
-      return null;
+      throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
     }
     //test if there is a matching method in the backend provider
     if (!genericBackendProvider[method]) {
@@ -1961,7 +1961,7 @@ export class LinkedServer extends Shape {
           Object.getPrototypeOf(genericBackendProvider).constructor.name
         }' of ${pkg} does not have a method called ${method}`
       );
-      return null;
+      throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
     }
 
     try {

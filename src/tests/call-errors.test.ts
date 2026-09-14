@@ -9,6 +9,7 @@ import { BackendAPIStoreProvider } from '../shapes/quadstores/BackendAPIStorePro
 // A provider method that throws must answer with an error status and a JSON
 // `{error}` body (the same shape `handleErrorsJson`/`sendError` use elsewhere),
 // never `200 null`. The client store must surface a failed call as a rejection.
+// Unmatched calls (501) and the store's resolution rules: call-semantics.test.ts.
 
 const servers: any[] = [];
 const originalCall = Server.call;
@@ -120,12 +121,16 @@ describe('LinkedServer call errors', () => {
 });
 
 describe('BackendAPIStore failed calls', () => {
-  it('rejects when Server.call resolves undefined (a non-2xx response)', async () => {
-    (Server as any).call = async () => undefined;
+  it('rejects when Server.call rejects (a non-2xx response with rejectOnError)', async () => {
+    (Server as any).call = async () => {
+      throw new Error('internal server error');
+    };
     const store = new BackendAPIStore({ id: 'http://example.org/store' });
     const query: any = { toJSON: () => ({}) };
 
-    await expect(store.selectQuery(query)).rejects.toThrow(/selectQuery failed/);
+    await expect(store.selectQuery(query)).rejects.toThrow(
+      /internal server error/
+    );
   });
 
   it('resolves a null result from a successful call', async () => {

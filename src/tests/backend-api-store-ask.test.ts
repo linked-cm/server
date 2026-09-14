@@ -29,7 +29,7 @@ describe('BackendAPIStore.askQuery', () => {
     await expect(store.askQuery(query)).resolves.toBe(true);
     expect(calls).toHaveLength(1);
     expect(calls[0][0]).toBe(store);
-    expect(calls[0][1]).toBe('askQuery');
+    expect(calls[0][1]).toEqual({ method: 'askQuery', rejectOnError: true });
     expect(calls[0][2]).toEqual(query.toJSON());
   });
 });
