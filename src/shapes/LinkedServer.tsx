@@ -1103,20 +1103,24 @@ export class LinkedServer extends Shape {
         // shapes:
         //   Node's import()             → ERR_MODULE_NOT_FOUND + "Cannot find module 'X/backend'"
         //   Vite's ssrLoadModule()      → "Failed to load url X/backend"
+        //   package `exports` without a ./backend entry (Node + Vite)
+        //                               → 'Missing "./backend" specifier in "X" package'
         // In either case, missing /backend on a package that doesn't
         // ship a backend is expected; loud-error only on REAL load
         // failures (syntax error inside an existing backend.ts, etc).
         const nodeMatch = e.message.match(/module \'([^\']+)'/);
         const viteMatch = e.message.match(/Failed to load url ([^\s]+)/);
         const matchedSpec = nodeMatch?.[1] ?? viteMatch?.[1];
+        const notExported = /Missing "\.\/backend" specifier in "[^"]+" package/.test(
+          e.message
+        );
         let providerNotFound =
-          !!matchedSpec &&
-          matchedSpec.includes('/backend') &&
-          (
-            (e.code === 'ERR_MODULE_NOT_FOUND' &&
+          notExported ||
+          (!!matchedSpec &&
+            matchedSpec.includes('/backend') &&
+            ((e.code === 'ERR_MODULE_NOT_FOUND' &&
               e.message.indexOf(`Cannot find module`) !== -1) ||
-            e.message.indexOf('Failed to load url') !== -1
-          );
+              e.message.indexOf('Failed to load url') !== -1));
         if (providerNotFound) {
           // console.warn('Error loading ' + providerPath + ': ' + e.stack);
           if (warnIfNotFound) {
