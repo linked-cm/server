@@ -4,6 +4,7 @@ import { Shape } from '@_linked/core/shapes/Shape';
 import { Server } from '@_linked/server-utils/utils/Server';
 import type { IDataset } from '@_linked/core/interfaces/IDataset';
 import type { SelectQuery } from '@_linked/core/queries/SelectQuery';
+import type { AskQuery } from '@_linked/core/queries/AskQuery';
 import type { UpdateQuery } from '@_linked/core/queries/UpdateQuery';
 import type { CreateQuery } from '@_linked/core/queries/CreateQuery';
 import type {
@@ -66,18 +67,32 @@ export class BackendAPIStore extends Shape implements IDataset {
   // live (closed) query can't cross Server.call as-is, so we ship `toJSON()` and
   // the BackendAPIStoreProvider rehydrates with `fromJSON()` on the backend.
   selectQuery(query: SelectQuery): Promise<SelectResult> {
-    return Server.call(this, 'selectQuery', query.toJSON()) as Promise<SelectResult>;
+    return this.callBackend('selectQuery', query.toJSON());
+  }
+
+  askQuery(query: AskQuery): Promise<boolean> {
+    return this.callBackend('askQuery', query.toJSON());
   }
 
   updateQuery(query: UpdateQuery): Promise<UpdateResult> {
-    return Server.call(this, 'updateQuery', query.toJSON()) as Promise<UpdateResult>;
+    return this.callBackend('updateQuery', query.toJSON());
   }
 
   createQuery(query: CreateQuery): Promise<CreateResult> {
-    return Server.call(this, 'createQuery', query.toJSON()) as Promise<CreateResult>;
+    return this.callBackend('createQuery', query.toJSON());
   }
 
   deleteQuery(query: DeleteQuery): Promise<DeleteResponse> {
-    return Server.call(this, 'deleteQuery', query.toJSON()) as Promise<DeleteResponse>;
+    return this.callBackend('deleteQuery', query.toJSON());
+  }
+
+  /**
+   * Opts in to `rejectOnError`, so a failed call (HTTP error status, or no
+   * provider on the backend) rejects with a `ServerCallError` carrying the
+   * status and the server's message instead of reading as an empty result.
+   * Whatever a successful call returns, `undefined` included, resolves as is.
+   */
+  private callBackend<T>(method: string, json: unknown): Promise<T> {
+    return Server.call(this, { method, rejectOnError: true }, json);
   }
 }

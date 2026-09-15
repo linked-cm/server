@@ -19,6 +19,7 @@ import { BackendProvider } from '@_linked/server-utils/utils/BackendProvider';
 import { JSONParser } from '@_linked/server-utils/utils/JSONParser';
 import { JSONWriter } from '@_linked/server-utils/utils/JSONWriter';
 import { Server } from '@_linked/server-utils/utils/Server';
+import { ServerCallError } from '@_linked/server-utils/utils/ServerCallError';
 import { ShapeProvider } from '@_linked/server-utils/utils/ShapeProvider';
 import { Shape } from '@_linked/core/shapes/Shape';
 import { LinkedErrorLogging } from '@_linked/core/utils/LinkedErrorLogging';
@@ -41,6 +42,10 @@ import { CookieJar } from 'tough-cookie';
 import { lincdServer } from '../ontologies/lincd-server.js';
 import { linkedShape } from '../package.js';
 import { indexShapesIntoMemory } from '../utils/Shapes.js';
+import {
+  installSpaFallback,
+  repinSpaFallback,
+} from '../utils/spaFallback.js';
 import { LincdAPI } from './LincdAPI.js';
 import type { RoutesConfig, RouteConfig } from '../types/RouteConfig.js';
 
@@ -118,14 +123,17 @@ export class LinkedServer extends Shape {
    * yarn linked start sends the contents of linked.config.js as an object to this constructor
    * @param n
    */
-  constructor(config?: LinkedConfig | string | { id: string }) {
+  constructor(config?: LinkedConfig | string | { id?: string }) {
     super(
       typeof config === 'string' || (config && 'id' in config)
         ? config
         : undefined
     );
     if (config && typeof config !== 'string' && !('id' in config)) {
-      this.config = config;
+      // The absence of `id` is the runtime discriminator for a LinkedConfig;
+      // the widened `{id?: string}` member of the union keeps TS from narrowing
+      // to it on that check alone.
+      this.config = config as LinkedConfig;
     }
 
     this.api = new LincdAPI({ id: process.env.SITE_ROOT + '/api' });
@@ -518,17 +526,18 @@ export class LinkedServer extends Shape {
       setTimeout(() => process.exit(0), 50);
     });
 
-    this.server.get(
-      '*',
-      this.handleErrors(async (req, res) => {
-        //make sure the frontend bundle has finished building
-        // await this.waitForWebpack();
-        this.render(req, res);
-      })
-    );
-
     // after controller
     await this.callGenericBackendProvidersMethod('setupAfterControllers');
+
+    // The SPA catch-all goes on LAST. `setupAfterControllers` is a documented
+    // hook for providers to register their own routes, so installing the
+    // catch-all before it would shadow every GET route registered there —
+    // answering them with the client shell at status 200.
+    // An API-only backend (`linked start --api-only`) has no app to render:
+    // without the catch-all, page requests get express's plain 404.
+    if (!(this.config.server as any)?.apiOnly) {
+      this.installSpaFallback();
+    }
 
     //remove http(s):// and remove port :[port]
     const HOST = process.env.SITE_ROOT.replace(/https?:\/\//, '').replace(
@@ -1109,20 +1118,24 @@ export class LinkedServer extends Shape {
         // shapes:
         //   Node's import()             → ERR_MODULE_NOT_FOUND + "Cannot find module 'X/backend'"
         //   Vite's ssrLoadModule()      → "Failed to load url X/backend"
+        //   package `exports` without a ./backend entry (Node + Vite)
+        //                               → 'Missing "./backend" specifier in "X" package'
         // In either case, missing /backend on a package that doesn't
         // ship a backend is expected; loud-error only on REAL load
         // failures (syntax error inside an existing backend.ts, etc).
         const nodeMatch = e.message.match(/module \'([^\']+)'/);
         const viteMatch = e.message.match(/Failed to load url ([^\s]+)/);
         const matchedSpec = nodeMatch?.[1] ?? viteMatch?.[1];
+        const notExported = /Missing "\.\/backend" specifier in "[^"]+" package/.test(
+          e.message
+        );
         let providerNotFound =
-          !!matchedSpec &&
-          matchedSpec.includes('/backend') &&
-          (
-            (e.code === 'ERR_MODULE_NOT_FOUND' &&
+          notExported ||
+          (!!matchedSpec &&
+            matchedSpec.includes('/backend') &&
+            ((e.code === 'ERR_MODULE_NOT_FOUND' &&
               e.message.indexOf(`Cannot find module`) !== -1) ||
-            e.message.indexOf('Failed to load url') !== -1
-          );
+              e.message.indexOf('Failed to load url') !== -1));
         if (providerNotFound) {
           // console.warn('Error loading ' + providerPath + ': ' + e.stack);
           if (warnIfNotFound) {
@@ -1160,6 +1173,22 @@ export class LinkedServer extends Shape {
    * Dispose calls have a 5 s soft timeout. A hanging dispose logs a
    * warning and is abandoned so HMR doesn't stall the whole dev loop.
    */
+  /**
+   * Install the client-shell catch-all as the last ordinary layer on the
+   * router stack. See utils/spaFallback.ts for why ordering has to be
+   * re-asserted rather than assumed.
+   */
+  private installSpaFallback(): void {
+    installSpaFallback(
+      this.server,
+      this.handleErrors(async (req, res) => {
+        //make sure the frontend bundle has finished building
+        // await this.waitForWebpack();
+        this.render(req, res);
+      })
+    );
+  }
+
   async onSourceChange(pkg: string): Promise<void> {
     const disposeWithTimeout = async (p: any, label: string) => {
       if (!p?.dispose) return;
@@ -1227,6 +1256,12 @@ export class LinkedServer extends Shape {
         }
       }
     }
+
+    // Providers just re-registered their routes, which express can only APPEND
+    // — i.e. behind the catch-all installed at boot. Put it back at the end so
+    // those routes stay reachable. Safe here: every registration above has
+    // completed, so no provider is mid-capture of its own layer indices.
+    repinSpaFallback(this.server);
   }
 
   async processBackendMethodCall(request, response) {
@@ -1356,6 +1391,7 @@ export class LinkedServer extends Shape {
       });
     };
 
+    let providerMethodFailed = false;
     try {
       //- find matching provider
       let shapeClass = getShapeClass(shapeURI);
@@ -1376,16 +1412,17 @@ export class LinkedServer extends Shape {
           }
         }
       }
-      // Degrade gracefully rather than crashing the whole request when the shape
-      // can't be resolved (e.g. it isn't registered on this side). Framework
-      // packages are kept single-instance by the cli vite-config's
-      // `optimizeDeps.exclude`, so a mismatch here signals a real misconfiguration.
+      // No provider for this shape (e.g. it isn't registered on this side).
+      // Framework packages are kept single-instance by the cli vite-config's
+      // `optimizeDeps.exclude`, so a mismatch here signals a real
+      // misconfiguration. Answer 501 (via handleErrorsJson) rather than an empty
+      // 200; direct backend callers get a rejected ServerCallError.
       if (!shapeProvider) {
         console.warn(
           `[LinkedServer] callShapeMethod: no provider for '${shapeURI}' ` +
-            `(pkg '${pkg}', method '${method}') — skipping.`
+            `(pkg '${pkg}', method '${method}').`
         );
-        return;
+        throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
       }
 
       if (shapeProvider) {
@@ -1427,6 +1464,11 @@ export class LinkedServer extends Shape {
                 }.${method}(): `,
                 e
               );
+              // Rethrow so the HTTP route answers with an error status (via
+              // handleErrorsJson) instead of `200 null`, and direct backend
+              // callers get a rejected promise.
+              providerMethodFailed = true;
+              throw e;
             }
           } else {
             console.warn(
@@ -1436,23 +1478,19 @@ export class LinkedServer extends Shape {
             );
           }
         } else {
-          return this.sendError(
-            response,
-            501,
+          console.warn(
             `${
               Object.getPrototypeOf(shapeProvider).constructor.name
             } does not have a method called ${method}`
           );
+          throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
         }
-      } else {
-        return this.sendError(
-          response,
-          501,
-          "Could not find provider for shape '" + shapeURI + "'"
-        );
       }
     } catch (err) {
-      console.warn(`Error whilst trying to access provider of ${pkg}: `, err);
+      if (!providerMethodFailed && !ServerCallError.is(err)) {
+        console.warn(`Error whilst trying to access provider of ${pkg}: `, err);
+      }
+      throw err;
     }
     return null;
   }
@@ -1473,6 +1511,11 @@ export class LinkedServer extends Shape {
       try {
         return await fn(req, res);
       } catch (err) {
+        // A ServerCallError (e.g. 501 for a call no provider handles) carries
+        // its own status and a message that is safe to send to the client.
+        if (ServerCallError.is(err)) {
+          return this.sendError(res, err.status, err.message);
+        }
         this.sendError(
           res,
           500,
@@ -1923,7 +1966,7 @@ export class LinkedServer extends Shape {
           pkg
         )} does not have a generic backend provider. If you can edit this package, make sure 'backend.ts' is included in 'tsconfig.json' and that it exports a provider.`
       );
-      return null;
+      throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
     }
     //test if there is a matching method in the backend provider
     if (!genericBackendProvider[method]) {
@@ -1932,7 +1975,7 @@ export class LinkedServer extends Shape {
           Object.getPrototypeOf(genericBackendProvider).constructor.name
         }' of ${pkg} does not have a method called ${method}`
       );
-      return null;
+      throw new ServerCallError(501, `No provider for ${pkg}/${method}`);
     }
 
     try {
@@ -1964,6 +2007,8 @@ export class LinkedServer extends Shape {
 
       // error logging
       LinkedErrorLogging.log(e);
+      // Rethrow so the HTTP route answers with an error status instead of `200 null`.
+      throw e;
     }
     return result;
   }

@@ -1,5 +1,91 @@
 # @\_linked/server
 
+## 2.3.0
+
+### Minor Changes
+
+- [#36](https://github.com/linked-cm/server/pull/36) [`e0c0627`](https://github.com/linked-cm/server/commit/e0c06276e578396efe4be413f367b391b2132451) Thanks [@flyon](https://github.com/flyon)! - Make server call failures explicit. Update code that relied on failed calls resolving quietly.
+
+  - **No provider now answers 501.** A `/call/...` request that no provider handles gets `501 {"error": "No provider for <pkg>/<method>"}`. Before, it got `200` with an empty body (shape methods) or `200 null` (backend methods). This covers both a missing provider and a provider without the called method.
+  - **Provider errors answer 500 (since 2.2.0).** A provider method that throws answers `500 {"error": ...}` instead of `200 null`. The 2.2.0 changeset did not mention this.
+  - **Backend-to-backend `Server.call` rejects.** When `Server.call` runs on the backend, where it calls `LinkedServer` directly, a provider method that throws rejects the promise (since 2.2.0). An unmatched call throws a `ServerCallError` with status 501. `@_linked/server-utils` resolves that as `undefined` unless the caller passes `rejectOnError: true`.
+  - **`BackendAPIStore` rejects only on HTTP errors.** It calls with `rejectOnError: true`, so a failed query rejects with a `ServerCallError` carrying the HTTP `status` and the server's message. A successful call resolves whatever the provider returned, `undefined` included. Before, every `undefined` result was treated as a failure.
+  - **Dependency.** Requires `@_linked/server-utils` ^1.2.0.
+
+## 2.2.0
+
+### Minor Changes
+
+- [#34](https://github.com/linked-cm/server/pull/34) [`f7ae758`](https://github.com/linked-cm/server/commit/f7ae758ba165df8c1f4a4ca46b189f3e17cc1e51) Thanks [@flyon](https://github.com/flyon)! - Honour `server.apiOnly` (set by `linked start --api-only`): LinkedServer skips the SPA catch-all, so a backend without a web frontend serves its API routes and answers page requests with a plain 404 instead of failing to render a missing `src/App.tsx`.
+
+  `BackendAPIStore` implements `askQuery`, required by `IDataset` since `@_linked/core` 2.18.1. It is forwarded to the backend like the other query kinds (as DSL-JSON through `Server.call`, rehydrated and answered by `BackendAPIStoreProvider` through `LinkedStorage.askQuery`), so it type-checks as an `IDataset` without a cast. `@_linked/core` is bumped to `^2.18.1`.
+
+  Linked packages whose `exports` have no `./backend` entry no longer log a `Missing "./backend" specifier` error at boot. Real backend load errors are still reported.
+
+  A backend or shape provider method that throws during a `/call/...` request now answers with HTTP 500 and a JSON `{error}` body (the same shape as other server errors) instead of `200 null`; direct backend-to-backend calls get a rejected promise. `BackendAPIStore` rejects when `Server.call` returns no response (a failed HTTP call), so a failed query no longer reads as an empty result.
+
+## 2.1.7
+
+### Patch Changes
+
+- [#30](https://github.com/linked-cm/server/pull/30) [`87a524b`](https://github.com/linked-cm/server/commit/87a524bde754865b89db509a96445c4e7e0a8b55) Thanks [@flyon](https://github.com/flyon)! - Track the current `@_linked/core` (^2.17.0).
+
+  The declared range was `^2.2.1` while the lockfile pinned 2.11.1, so CI built
+  against a core three minor versions behind the one consumers actually run. That
+  divergence is invisible locally — the monorepo resolves core to 2.17.0 — and it
+  surfaced as a build failure only after a change referenced a module that exists
+  in 2.17.0 but not in 2.11.1.
+
+## 2.1.6
+
+### Patch Changes
+
+- [#28](https://github.com/linked-cm/server/pull/28) [`093e096`](https://github.com/linked-cm/server/commit/093e096ee1ffd70c516289b850d0f4081088df4c) Thanks [@flyon](https://github.com/flyon)! - Install the SPA catch-all after `setupAfterControllers`, and re-pin it after HMR.
+
+  The client shell is served from a catch-all `GET *`, which is only a fallback by
+  accident of registration order. Two supported paths register GET routes once it
+  already exists: `setupAfterControllers` (a documented provider hook, which ran
+  _after_ the catch-all was installed) and `onSourceChange`, where
+  `disposeRoutes()` splices a provider's layers out and `registerRoute()` can only
+  append them back. A route that ends up behind the catch-all is answered with the
+  HTML shell at status 200, so it reads as an auth/config problem rather than a
+  routing one.
+
+  The catch-all now goes on last, in its own `installSpaFallback()` step after
+  `setupAfterControllers`, and `onSourceChange` re-pins it once providers have
+  re-registered. Ordering is asserted at registration time from the two places
+  that create the situation, so nothing hooks express's dispatch path. Trailing
+  error-handling middleware (arity-4) is deliberately kept behind the fallback, so
+  errors thrown while rendering the shell still reach the app's error handler.
+
+  Adds the package's first test harness (jest + ts-jest) with coverage for the
+  ordering, the dispose/re-register cycle, error-handler placement, idempotency,
+  and a negative control asserting the shell wins when re-pinning is skipped.
+
+## 2.1.5
+
+### Patch Changes
+
+- [#26](https://github.com/linked-cm/server/pull/26) [`b3ea735`](https://github.com/linked-cm/server/commit/b3ea7357b757be0bdbd17643444dfeba1fba16da) Thanks [@flyon](https://github.com/flyon)! - Build the in-memory shape index against either core property-list shape.
+
+  `indexShapesIntoMemory` read `localShape.properties`. Newer `@_linked/core`
+  converted shape metadata to plain objects exposing `propertyShapes` and dropped
+  the `NodeShape.properties` getter, so that read returned undefined and threw on
+  `.map`. The throw happened while evaluating the object literal, before the
+  `shapeIndex[...] = ...` assignment, on the first shape class carrying a
+  `.shape` — so the loop aborted on its first iteration and the index was left
+  completely empty rather than partial. Everything reading it (LincdAPI
+  `get_all_shapes` / `get_shape_details`, and the shape-catalog fallback and
+  shape-sync in create-now-js) silently saw nothing.
+
+  Nothing surfaced because the async call was not awaited at either call site
+  (`initOnly`, `start`): the failure escaped as an unhandled rejection and boot
+  continued as if it had succeeded. Both call sites now await it.
+
+  The property list is read as `.properties ?? .propertyShapes`, so the index
+  builds against both the core generation this package declares (which still has
+  the getter) and newer core (plain objects).
+
 ## 2.1.3
 
 ### Patch Changes
